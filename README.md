@@ -23,7 +23,6 @@ sudo yum install python35u python35u-devel
 
 The easiest way to install `jasmin-ldap` is to use [pip](https://pypi.python.org/pypi/pip),
 which is included by default with Python 3.5.
-```
 
 `jasmin-ldap` is currently installed directly from Github:
 
