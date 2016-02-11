@@ -33,7 +33,7 @@ if __name__ == "__main__":
         name = 'jasmin-ldap',
         version = version,
         description = 'Library providing an improved interface to ldap3, including '
-                      'lazy, filterable queries and a very basic datamapper',
+                      'lazy, filterable queries',
         long_description = README,
         classifiers = [
             "Programming Language :: Python :: 3.5",
@@ -41,7 +41,7 @@ if __name__ == "__main__":
         author = 'Matt Pryor',
         author_email = 'matt.pryor@stfc.ac.uk',
         url = 'http://www.jasmin.ac.uk',
-        keywords = 'jasmin ldap datamapper object mapper',
+        keywords = 'jasmin ldap',
         packages = find_packages(),
         include_package_data = True,
         zip_safe = False,

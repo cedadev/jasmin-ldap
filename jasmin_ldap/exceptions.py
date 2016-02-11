@@ -26,3 +26,9 @@ class NoSuchObjectError(LDAPError, ValueError):
     """
     Raised when an operation is attempted on a non-existent object.
     """
+
+
+class ObjectAlreadyExistsError(LDAPError, ValueError):
+    """
+    Raised when attempting to create an object that already exists.
+    """
