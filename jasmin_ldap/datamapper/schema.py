@@ -10,8 +10,6 @@ __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 from collections import namedtuple, Iterable
 from functools import reduce
 
-from .exceptions import SchemaValidationError
-
 
 class Field:
     """
