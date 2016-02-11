@@ -65,7 +65,7 @@ class Query:
             field, lookup, value = node.field, node.lookup_type, node.value
             try:
                 return Expression(
-                    self._schema.fields[field].attribute, lookup, value
+                    self._schema.field_for_name(field).attribute, lookup, value
                 )
             except KeyError:
                 # Convert the key error into a more informative message
@@ -138,9 +138,9 @@ class Query:
         # Create the underlying LDAP query
         q = LDAPQuery(
             pool,
-            schema.__base_dn__,
+            schema.base_dn,
             # The default filter is the object classes from the schema
-            reduce(and_, (F(objectClass = o) for o in schema.__object_classes__)),
+            reduce(and_, (F(objectClass = o) for o in schema.object_classes)),
             scope = LDAPQuery.SCOPE_SINGLE_LEVEL
         )
         # Create the object-mapped query

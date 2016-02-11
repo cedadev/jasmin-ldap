@@ -28,6 +28,10 @@ def F(*args, **kwargs):
     to the Django ORM. If no lookup type is given, ``None`` is used.
 
     The filters are combined using AND.
+
+    :param: \*args: Any number of :py:class:`Node` objects
+    :param: \*\*kwargs: Any number of Django-style keyword filters (see above)
+    :returns: The resulting :py:class:`Node`
     """
     filters = []
     # Check that all the given args are nodes
@@ -60,18 +64,26 @@ class Node:
     def and_(self, other):
         """
         Returns a new node that combines this node and the given node using AND.
+
+        :param other: The :py:class:`Node` to combine with this node
+        :returns: The resulting :py:class:`Node`
         """
         return AndNode(self, other)
 
     def or_(self, other):
         """
         Returns a new node that combines this node and the given node using OR.
+
+        :param other: The :py:class:`Node` to combine with this node
+        :returns: The resulting :py:class:`Node`
         """
         return OrNode(self, other)
 
     def not_(self):
         """
         Returns a new node that negates this node using NOT.
+
+        :returns: The resulting :py:class:`Node`
         """
         return NotNode(self)
 
@@ -120,6 +132,8 @@ class AndNode(Node):
     def children(self):
         """
         Returns the child nodes that should be combined using AND.
+
+        :returns: A ``tuple`` of :py:class:`Node`\ s
         """
         return self._children
 
@@ -140,6 +154,8 @@ class OrNode(Node):
     def children(self):
         """
         Returns the child nodes that should be combined using OR.
+
+        :returns: A ``tuple`` of :py:class:`Node`\ s
         """
         return self._children
 
@@ -160,6 +176,8 @@ class NotNode(Node):
     def child(self):
         """
         Returns the node that is being negated using NOT.
+
+        :returns: A :py:class:`Node`
         """
         return self._child
 

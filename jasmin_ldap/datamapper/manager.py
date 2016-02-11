@@ -27,42 +27,66 @@ class EntityManager:
         Manually associates an object type with a schema instance or schema class.
 
         :param obj_type: The object type
-        :param schema: The schema instance or schema class
+        :param schema: The schema instance
         """
-        # Create an instance if we have a class
-        if isinstance(schema, type) and issubclass(schema, Schema):
-            schema = schema()
         self._registry[obj_type] = schema
 
-    def find_schema(self, obj_type):
+    def find_schema(self, obj):
         """
-        Tries to find a schema for ``obj_type``.
+        Tries to find and return a schema for the given object.
 
-        If a schema for the type has been manually registered (using ``register``)
-        or previously been discovered and cached, that schema will be returned.
+        If the object is a class, there must be a schema registered for the class.
+        If the object is an instance, it's class is used.
 
-        If no schema is found via that route, the method will look for a subclass of
-        :py:class:`.schema.Schema` as a nested class of ``obj_type`` and use that
-        as the schema class. The result will be cached for future use.
-
-        If a schema is not found by either of those methods, an error will be raised.
+        If no schema has been registered, an error is raised.
         """
-        # If we already have a schema, use that
-        if obj_type in self._registry:
-            return self._registry[obj_type]
-        # Otherwise, try and find a nested schema class
-        for value in obj_type.__dict__.values():
-            if isinstance(value, type) and issubclass(value, Schema):
-                # Cache it for the future
-                schema = value()
-                self._registry[obj_type] = schema
-                return schema
-        raise SchemaNotFoundError(
-            "No schema defined for '{}'".format(obj_type.__name__)
-        )
+        if not isinstance(obj, type):
+            return self.find_schema(type(obj))
+        try:
+            return self._registry[obj]
+        except KeyError:
+            raise SchemaNotFoundError(
+                "No schema defined for '{}'".format(obj.__name__)
+            )
 
-    def create_query(self, obj_type):
+    def query(self, obj_type):
         """
         Creates a query for the given object type.
         """
         return Query.create(self._pool, obj_type, self.find_schema(obj_type))
+
+    def create(self, obj):
+        """
+        Creates an object in LDAP.
+
+        :param obj: The object to create
+        :returns: ``True`` on success (should raise on failure)
+        """
+        schema = self.find_schema(obj)
+        dn, attrs = schema.to_ldap(obj)
+        with self._pool.connection() as conn:
+            return conn.create_entry(dn, attrs)
+
+    def update(self, obj):
+        """
+        Updates an object in LDAP.
+
+        :param obj: The object to udpate
+        :returns: ``True`` on success (should raise on failure)
+        """
+        schema = self.find_schema(obj)
+        dn, attrs = schema.to_ldap(obj)
+        with self._pool.connection() as conn:
+            return conn.update_entry(dn, attrs)
+
+    def delete(self, obj):
+        """
+        Deletes an object in LDAP.
+
+        :param obj: The object to delete
+        :returns: ``True`` on success (should raise on failure)
+        """
+        schema = self.find_schema(obj)
+        dn = schema.build_dn(obj)
+        with self._pool.connection() as conn:
+            return conn.delete_entry(dn)
