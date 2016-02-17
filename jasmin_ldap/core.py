@@ -228,23 +228,20 @@ class Connection:
         """
         Creates an entry at the given DN with the given attributes.
 
-        ``attributes`` should be a dictionary mapping attribute names to an iterable
-        of attribute values, *even if the attribute only has a single value*.
-
         :param dn: The DN to create
         :param attributes: The attributes to give the new entry
         :returns: ``True`` on success (should raise on failure)
         """
-        raise NotImplementedError
+        try:
+            self._conn.add(dn, attributes = attributes)
+        except ldap3.LDAPException as e:
+            raise LDAPError('Error while creating entry') from e
 
     def update_entry(self, dn, attributes):
         """
         Updates the given DN with the given attributes. Note that this will **ONLY**
         affect attributes that explicitly given. Attributes that are not given
         will be left untouched.
-
-        ``attributes`` should be a dictionary mapping attribute names to an iterable
-        of attribute values, *even if the attribute only has a single value*.
 
         :param dn: The DN to update
         :param attributes: The attributes to update on the entry
