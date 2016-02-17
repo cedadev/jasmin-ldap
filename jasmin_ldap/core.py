@@ -234,6 +234,7 @@ class Connection:
         """
         try:
             self._conn.add(dn, attributes = attributes)
+            return True
         except ldap3.LDAPException as e:
             raise LDAPError('Error while creating entry') from e
 
@@ -248,6 +249,20 @@ class Connection:
         :returns: ``True`` on success (should raise on failure)
         """
         raise NotImplementedError
+
+    def set_entry_password(self, dn, password):
+        """
+        Sets the password for the entry with the given DN.
+
+        :param dn: The DN of the entry to set the password for
+        :param password: The plaintext password
+        :returns: ``True`` on success (should raise on failure)
+        """
+        try:
+            self._conn.extend.standard.modify_password(dn, None, password)
+            return True
+        except ldap3.LDAPException as e:
+            raise LDAPError('Error while setting entry password') from e
 
     def attr_append(self, dn, attr, value):
         """
