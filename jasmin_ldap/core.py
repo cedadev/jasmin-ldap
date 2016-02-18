@@ -261,6 +261,9 @@ class Connection:
         try:
             self._conn.extend.standard.modify_password(dn, None, password)
             return True
+        except ldap3.LDAPNoSuchObjectResult as e:
+            # The DN doesn't exist
+            raise NoSuchObjectError('DN does not exist: {}'.format(dn)) from e
         except ldap3.LDAPException as e:
             raise LDAPError('Error while setting entry password') from e
 
