@@ -10,7 +10,7 @@ import contextlib, queue
 
 import ldap3
 
-from .exceptions import LDAPError, AuthenticationError, NoSuchObjectError
+from .exceptions import *
 
 
 class Server:
@@ -235,6 +235,10 @@ class Connection:
         try:
             self._conn.add(dn, attributes = attributes)
             return True
+        except ldap3.LDAPEntryAlreadyExistsResult as e:
+            raise ObjectAlreadyExistsError('Object already exists at {}'.format(dn)) from e
+        except ldap3.LDAPStrongerAuthRequiredResult as e:
+            raise PermissionDeniedError('Not authenticated to create entries') from e
         except ldap3.LDAPException as e:
             raise LDAPError('Error while creating entry') from e
 
@@ -264,54 +268,10 @@ class Connection:
         except ldap3.LDAPNoSuchObjectResult as e:
             # The DN doesn't exist
             raise NoSuchObjectError('DN does not exist: {}'.format(dn)) from e
+        except ldap3.LDAPStrongerAuthRequiredResult as e:
+            raise PermissionDeniedError('Not authenticated to set passwords') from e
         except ldap3.LDAPException as e:
             raise LDAPError('Error while setting entry password') from e
-
-    def attr_append(self, dn, attr, value):
-        """
-        Appends a value to the list of values for the given attribute for the given DN.
-
-        If the value already exists, this is a no-op.
-
-        :param dn: The DN to append to
-        :param attr: The name of the attribute to append to
-        :param value: The value to append
-        :returns: ``True`` on success (should raise on failure)
-        """
-        try:
-            self._conn.modify(dn, { attr : [(ldap3.MODIFY_ADD, (value, ))] })
-            return True
-        except ldap3.LDAPAttributeOrValueExistsResult:
-            # If the attribute value already exists, we're good
-            return True
-        except ldap3.LDAPNoSuchObjectResult as e:
-            # The DN doesn't exist
-            raise NoSuchObjectError('DN does not exist: {}'.format(dn)) from e
-        except ldap3.LDAPException as e:
-            raise LDAPError('Error while modifying record') from e
-
-    def attr_remove(self, dn, attr, value):
-        """
-        Removes a value from the list of values for the given attribute for the given DN.
-
-        If the value doesn't exist, this is a no-op.
-
-        :param dn: The DN to remove from
-        :param attr: The name of the attribute to remove from
-        :param value: The value to remove
-        :returns: ``True`` on success (should raise on failure)
-        """
-        try:
-            self._conn.modify(dn, { attr : [(ldap3.MODIFY_DELETE, (value, ))] })
-            return True
-        except ldap3.LDAPNoSuchAttributeResult:
-            # If the attribute or value doesn't exist, we're good
-            return True
-        except ldap3.LDAPNoSuchObjectResult as e:
-            # The DN doesn't exist
-            raise NoSuchObjectError('DN does not exist: {}'.format(dn)) from e
-        except ldap3.LDAPException as e:
-            raise LDAPError('Error while modifying record') from e
 
     def delete_entry(self, dn):
         """

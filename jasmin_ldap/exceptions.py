@@ -32,3 +32,10 @@ class ObjectAlreadyExistsError(LDAPError, ValueError):
     """
     Raised when attempting to create an object that already exists.
     """
+
+
+class PermissionDeniedError(LDAPError):
+    """
+    Raised when the connection does not have permission to perform the requested
+    operation.
+    """
