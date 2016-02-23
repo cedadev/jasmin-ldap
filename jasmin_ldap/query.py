@@ -59,6 +59,7 @@ class Query:
         'endswith'    : '({field}=*{value})',
         'iendswith'   : '({field}=*{value})',
         'present'     : '({field}=*)',
+        'search'      : '({field}=*{value}*)',
     }
     # Characters that need escaping in values for filter expressions
     _ESCAPE_CHARS = {
@@ -81,6 +82,12 @@ class Query:
                 expressions = [Expression(field, 'exact', v) for v in value]
                 # Combine the expressions using OR and compile the result
                 return self._compile(reduce(or_, expressions))
+            # Present with a false-y value is not present
+            elif lookup == 'present' and not value:
+                return self._compile(NotNode(Expression(field, 'present', True)))
+            # isnull is the opposite of present
+            elif lookup == 'isnull':
+                return self._compile(NotNode(Expression(field, 'present', value)))
             # Escape any dodgy characters in the value
             if isinstance(value, bytes):
                 value = ldap3.utils.conv.escape_bytes(value)
