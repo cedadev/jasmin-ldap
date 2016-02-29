@@ -135,11 +135,11 @@ class QueryBase(metaclass = abc.ABCMeta):
         ::
 
             from jasmin_ldap.aggregations import Count, Max, Min
-            print(query.aggregate(count = Count(),
-                                  max_uid = Max('uidNumber'),
-                                  min_uid = Min('uidNumber')))
-            # Prints:
-            #   {'max_uid': [7010004], 'count': [15], 'min_uid': [25157]}
+            query.aggregate(count = Count(),
+                            max_uid = Max('uidNumber'),
+                            min_uid = Min('uidNumber')))
+            # Returns:
+            #   {'max_uid': [10], 'count': [15], 'min_uid': [5]}
         """
         # Before we iterate, reset the aggregations
         for _, agg in aggregations.items(): agg.reset()
@@ -224,10 +224,10 @@ class Query(QueryBase):
                 return self._compile(reduce(or_, expressions))
             # Present with a false-y value is not present
             elif lookup == 'present' and not value:
-                return self._compile(NotNode(Expression(field, 'present', True)))
+                return self._compile(~Expression(field, 'present', True))
             # isnull is the opposite of present
             elif lookup == 'isnull':
-                return self._compile(NotNode(Expression(field, 'present', value)))
+                return self._compile(~Expression(field, 'present', value))
             # Escape any dodgy characters in the value
             if isinstance(value, bytes):
                 value = ldap3.utils.conv.escape_bytes(value)
@@ -281,6 +281,67 @@ class AnnotatedQuery(QueryBase):
         self._query = query
         self._annotations = dict(annotations)
 
+    def _split_node(self, node):
+        """
+        Splits the given filter node into two - one that can be applied to the
+        underlying query (i.e. doesn't involve the annotations) and one that
+        must be applied to the annotations.
+
+        The two returned filters must be combinable using AND to be equivalent to
+        the original node.
+
+        If it is not possible or necessary to split the node, one of the nodes
+        will be None.
+        """
+        if isinstance(node, Expression):
+            if node.field in self._annotations:
+                # If the node is querying an annotation it has to be applied to
+                # the annotated query
+                return (None, node)
+            else:
+                # Otherwise, it can be applied to the underlying query
+                return (node, None)
+        elif isinstance(node, AndNode):
+            # This takes advantage of the fact that, because we are combining with
+            # AND, the ordering doesn't matter
+            left, right = [], []
+            for n in node.children:
+                # Note that these nodes can be combined using AND to be equivalent
+                # to n
+                l, r = self._split_node(n)
+                if l: left.append(l)
+                if r: right.append(r)
+            if len(left) >= 2:
+                left = AndNode(*left)
+            elif len(left) == 1:
+                left = left[0]
+            else:
+                left = None
+            if len(right) >= 2:
+                right = AndNode(*right)
+            elif len(right) == 1:
+                right = right[0]
+            else:
+                right = None
+            return (left, right)
+        elif isinstance(node, OrNode):
+            # Once ORs are involved, we can't split the query - either the whole
+            # node is applied to the underlying query or the whole node is applied
+            # to this query directly
+            for n in node.children:
+                left, right = self._split_node(n)
+                if right:
+                    return (None, node)
+            return (node, None)
+        elif isinstance(node, NotNode):
+            # We can't split a NOT query either
+            left, right = self._split_node(node.child)
+            if right:
+                return (None, node)
+            return (node, None)
+        else:
+            raise ValueError("Unknown node type '{}'".format(repr(node)))
+
     def __iter__(self):
         for dn, attrs in self._query:
             for attr, func in self._annotations.items():
@@ -293,6 +354,19 @@ class AnnotatedQuery(QueryBase):
                     annot = [annot]
                 attrs[attr] = annot
             yield (dn, attrs)
+
+    def filter(self, *args, **kwargs):
+        """
+        See :py:meth:`QueryBase.filter`
+        """
+        # Split the node into a part that can be applied to the underlying query
+        # and a part that requires the annotations
+        # We do this to push as much filtering into LDAP as possible
+        left, right = self._split_node(F(*args, **kwargs))
+        # Apply the left filter to the underlying query if there is one
+        q = AnnotatedQuery(self._query.filter(left), self._annotations) if left else self
+        # Apply the right hand filter to the annotated query
+        return FilteredQuery(q, right) if right else q
 
 
 class FilteredQuery(QueryBase):
@@ -372,8 +446,10 @@ class FilteredQuery(QueryBase):
         """
         See :py:meth:`QueryBase.filter`
         """
-        # Rather than having nested FilteredQuery objects, just extend the existing filter
-        return FilteredQuery(self._query, self._filter & F(*args, **kwargs))
+        # Apply the filter to the underlying query
+        # This risks having nested FilteredQuerys for the advantage of pushing as
+        # much filtering into LDAP as possible
+        return FilteredQuery(self._query.filter(F(*args, **kwargs)), self._filter)
 
 
 class OrderedQuery(QueryBase):
