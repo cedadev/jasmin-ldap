@@ -7,8 +7,8 @@
     exceptions
     filters
     query
-    validators
-    datamapper/index
+    annotations
+    aggregations
 
 
 .. automodule:: jasmin_ldap

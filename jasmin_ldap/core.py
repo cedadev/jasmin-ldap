@@ -6,7 +6,8 @@ is intended to be more intuitive and easier to mock.
 __author__ = "Matt Pryor"
 __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 
-import contextlib, queue
+import contextlib, queue, functools
+from collections import Iterable
 
 import ldap3
 
@@ -133,6 +134,19 @@ class ConnectionPool:
             # If the queue is full, nuke the connection
             conn.close()
 
+    def close_all(self):
+        """
+        Closes all the connections and empties the pool.
+        """
+        # Swap the queue for a queue of size 0 so that any connections returned to
+        # the pool after this method is called are automatically closed
+        q, self._queue = self._queue, queue.Queue(0)
+        while True:
+            try:
+                q.get_nowait().close()
+            except queue.Empty:
+                break
+
     @contextlib.contextmanager
     def connection(self):
         """
@@ -144,7 +158,7 @@ class ConnectionPool:
             yield conn
             # If the operation completes successfully, return conn to the pool
             self.release(conn)
-        except (NoSuchObjectError):
+        except OperationalError:
             # If an 'acceptable' LDAPError occurs, release the connection
             self.release(conn)
             raise
@@ -156,6 +170,46 @@ class ConnectionPool:
             # Any other exception is probably not the connection's fault
             self.release(conn)
             raise
+
+
+def _convert_ldap_errors(f):
+    """
+    Decorator for methods that catches and converts ldap3 errors.
+    """
+    @functools.wraps(f)
+    def wrapper(*args, **kwargs):
+        try:
+            return f(*args, **kwargs)
+        except ldap3.LDAPEntryAlreadyExistsResult as e:
+            raise ObjectAlreadyExistsError('Object already exists') from e
+        except ldap3.LDAPNoSuchObjectResult as e:
+            raise NoSuchObjectError('Object does not exist') from e
+        except ldap3.LDAPObjectClassViolationResult as e:
+            raise SchemaViolationError('Schema violation occured') from e
+        except ldap3.LDAPStrongerAuthRequiredResult as e:
+            raise PermissionDeniedError('Permission denied') from e
+        except ldap3.LDAPException as e:
+            raise LDAPError('An LDAP error occured') from e
+    return wrapper
+
+
+def _convert(values):
+    """
+    Tries to convert an iterable of string values from LDAP into int/float for
+    comparisons.
+
+    If the conversion fails for any element, the original strings are returned.
+    """
+    def _f(values):
+        for v in values:
+            try:
+                yield int(v)
+            except ValueError:
+                yield float(v)
+    try:
+        return list(_f(values))
+    except ValueError:
+        return values
 
 
 class Connection:
@@ -184,6 +238,7 @@ class Connection:
     #: Scope to search just a single level
     SEARCH_SCOPE_SINGLE_LEVEL = ldap3.SEARCH_SCOPE_SINGLE_LEVEL
 
+    @_convert_ldap_errors
     def search(self, base_dn, filter_str, scope = SEARCH_SCOPE_SINGLE_LEVEL):
         """
         Perform an LDAP search to find entries that match the given LDAP filter
@@ -197,6 +252,8 @@ class Connection:
 
         :param base_dn: The base DN for the search
         :param filter_str: The LDAP filter string for the search
+        :param scope: The search scope, one of ``Connection.SEARCH_SCOPE_SUBTREE``
+                      and ``Connection.SEARCH_SCOPE_SINGLE_LEVEL`` (optional)
         :returns: An iterable of ``(dn, attributes)`` tuples
         """
         try:
@@ -211,19 +268,22 @@ class Connection:
                 generator = True,
             )
             for entry in entries:
-                yield (entry['dn'], entry['attributes'])
+                # Try to convert each attribute to numeric values
+                attrs = { k : _convert(v) for k, v in entry['attributes'].items() }
+                yield (entry['dn'], attrs)
+        except ldap3.LDAPNoSuchObjectResult as e:
+            # NoSuchObject means an empty search
+            return
+        except ldap3.LDAPEntryAlreadyExistsResult as e:
+            raise ObjectAlreadyExistsError('Object already exists') from e
+        except ldap3.LDAPObjectClassViolationResult as e:
+            raise SchemaViolationError('Schema violation occured') from e
+        except ldap3.LDAPStrongerAuthRequiredResult as e:
+            raise PermissionDeniedError('Permission denied') from e
         except ldap3.LDAPException as e:
-            raise LDAPError('Error while searching') from e
+            raise LDAPError('An LDAP error occured') from e
 
-    def get_entry(self, dn):
-        """
-        Gets an entry using its DN, or ``None`` if the DN doesn't exist.
-
-        :param dn: The DN to find
-        :returns: The dictionary of attributes for the DN, or ``None``
-        """
-        raise NotImplementedError
-
+    @_convert_ldap_errors
     def create_entry(self, dn, attributes):
         """
         Creates an entry at the given DN with the given attributes.
@@ -232,16 +292,12 @@ class Connection:
         :param attributes: The attributes to give the new entry
         :returns: ``True`` on success (should raise on failure)
         """
-        try:
-            self._conn.add(dn, attributes = attributes)
-            return True
-        except ldap3.LDAPEntryAlreadyExistsResult as e:
-            raise ObjectAlreadyExistsError('Object already exists at {}'.format(dn)) from e
-        except ldap3.LDAPStrongerAuthRequiredResult as e:
-            raise PermissionDeniedError('Not authenticated to create entries') from e
-        except ldap3.LDAPException as e:
-            raise LDAPError('Error while creating entry') from e
+        # Prepare the attributes for insertion by removing any keys with empty values
+        attributes = { k : v for k, v in attributes.items() if v }
+        self._conn.add(dn, attributes = attributes)
+        return True
 
+    @_convert_ldap_errors
     def update_entry(self, dn, attributes):
         """
         Updates the given DN with the given attributes. Note that this will **ONLY**
@@ -252,8 +308,19 @@ class Connection:
         :param attributes: The attributes to update on the entry
         :returns: ``True`` on success (should raise on failure)
         """
-        raise NotImplementedError
+        def to_tuple(value):
+            if isinstance(value, Iterable) and not isinstance(value, str):
+                return tuple(value)
+            return (value, )
+        # Indicate that the attributes should replace any existing attributes
+        attributes = {
+            name : (ldap3.MODIFY_REPLACE, to_tuple(value))
+            for name, value in attributes.items()
+        }
+        self._conn.modify(dn, attributes)
+        return True
 
+    @_convert_ldap_errors
     def set_entry_password(self, dn, password):
         """
         Sets the password for the entry with the given DN.
@@ -262,17 +329,21 @@ class Connection:
         :param password: The plaintext password
         :returns: ``True`` on success (should raise on failure)
         """
-        try:
-            self._conn.extend.standard.modify_password(dn, None, password)
-            return True
-        except ldap3.LDAPNoSuchObjectResult as e:
-            # The DN doesn't exist
-            raise NoSuchObjectError('DN does not exist: {}'.format(dn)) from e
-        except ldap3.LDAPStrongerAuthRequiredResult as e:
-            raise PermissionDeniedError('Not authenticated to set passwords') from e
-        except ldap3.LDAPException as e:
-            raise LDAPError('Error while setting entry password') from e
+        self._conn.extend.standard.modify_password(dn, None, password)
+        return True
 
+    @_convert_ldap_errors
+    def rename_entry(self, old_dn, new_dn):
+        """
+        Moves the entry at ``old_dn`` to ``new_dn``.
+
+        :param old_dn: The current DN of the item
+        :param new_dn: The new DN of the item
+        :returns: ``True`` on success (should raise on failure)
+        """
+        raise NotImplementedError
+
+    @_convert_ldap_errors
     def delete_entry(self, dn):
         """
         Deletes the entry with the given DN.
@@ -280,16 +351,15 @@ class Connection:
         :param dn: The DN to delete
         :returns: ``True`` on success (should raise on failure)
         """
-        raise NotImplementedError
+        self._conn.delete(dn)
+        return True
 
+    @_convert_ldap_errors
     def close(self):
         """
         Closes the connection.
 
         :returns: ``True`` on success (should raise on failure)
         """
-        try:
-            self._conn.unbind()
-        except ldap3.LDAPException as e:
-            raise LDAPError('Error while closing connection') from e
+        self._conn.unbind()
         return True

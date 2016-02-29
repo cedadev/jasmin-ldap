@@ -4,9 +4,8 @@ Library providing an improved interface to LDAP built on [ldap3](https://ldap3.r
 
   * Fully object-oriented
   * Connection pooling
-  * Lazy, filterable search queries
-  * A basic [data-mapper](https://en.wikipedia.org/wiki/Data_mapper_pattern)
-    implementation
+  * Lazy, filter-able, order-able, index-able search queries with annotation
+    and aggregation
 
 
 ## Requirements and installation
@@ -60,3 +59,5 @@ cd doc
 make clean html SPHINXBUILD=/path/to/sphinx-build
 firefox _build/html/index.html
 ```
+
+Note that this requires [Sphinx](http://www.sphinx-doc.org/) to be installed.

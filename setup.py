@@ -23,8 +23,6 @@ with open(os.path.join(here, 'README.md')) as f:
 
 requires = [
     'ldap3',
-    # Required for docs
-    'sphinx',
 ]
 
 if __name__ == "__main__":
@@ -41,7 +39,7 @@ if __name__ == "__main__":
         author = 'Matt Pryor',
         author_email = 'matt.pryor@stfc.ac.uk',
         url = 'http://www.jasmin.ac.uk',
-        keywords = 'jasmin ldap',
+        keywords = 'jasmin ldap query',
         packages = find_packages(),
         include_package_data = True,
         zip_safe = False,

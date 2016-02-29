@@ -5,8 +5,10 @@ This module provides facilities for making LDAP queries.
 __author__ = "Matt Pryor"
 __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 
-from functools import reduce
+import abc, re
+from functools import reduce, cmp_to_key
 from operator import or_
+from collections import Iterable
 
 import ldap3.utils.conv
 
@@ -14,7 +16,149 @@ from .core import Connection
 from .filters import F, Expression, AndNode, OrNode, NotNode
 
 
-class Query:
+class QueryBase(metaclass = abc.ABCMeta):
+    """
+    Base class containing functionality common to all query types.
+    """
+    @abc.abstractmethod
+    def __iter__(self):
+        """
+        Returns an iterator of the results from this query.
+        """
+
+    def one(self):
+        """
+        Returns a single result from the query, or ``None`` if there is no such
+        object.
+        """
+        return next(iter(self), None)
+
+    def filter(self, *args, **kwargs):
+        """
+        Returns a new query with args combined with this query using AND.
+
+        Positional arguments should be :py:class:`.filters.Node`\ s.
+
+        Keyword arguments should be of the form ``field__lookuptype = value``,
+        similar to the Django ORM. If no lookup type is given, exact is used.
+
+        ::
+
+            from jasmin_ldap.filters import F
+
+            q = Query(...).filter(mail__exact = 'jbloggs@example.com')
+            q = Query(...).filter(F(mail = 'jbloggs@example.com') | F(uid = 'jbloggs'))
+        """
+        return FilteredQuery(self, F(*args, **kwargs))
+
+    def exclude(self, *args, **kwargs):
+        """
+        Returns a new query with NOT(args) combined with this query using AND.
+
+        Positional arguments should be :py:class:`.filters.Node` objects.
+
+        Keyword arguments should be of the form ``field__lookuptype = <value>``,
+        similar to the Django ORM.
+        """
+        return self.filter(~F(*args, **kwargs))
+
+    def annotate(self, **annotations):
+        """
+        Returns a new query consisting of this query with extra calculated
+        attributes (annotations).
+
+        Each annotation is just a name => callable mapping, where the callable recieves
+        the dn and attribute dictionary as its arguments.
+
+        Some commonly used annotations are provided in the :py:mod:`~.annotations`
+        module.
+
+        For example, to annotate a query with a field containing the number of mail
+        entries:
+
+        ::
+
+            from jasmin_ldap.annotations import Count
+            query = query.annotate(num_mails = Count('mail'))
+
+        After doing this, each attribute dictionary will have an additional ``num_mails``
+        element.
+        """
+        return AnnotatedQuery(self, annotations)
+
+    def order_by(self, *orderings):
+        """
+        Returns a new query with the given orderings imposed.
+
+        Each ordering is an attribute name. Prefixing the attribute name with ``-``
+        indicates that the ordering should be descending. The orderings are applied
+        in the order they are given, i.e. entries are ordered as follows:
+
+          1. Entries are ordered by the first ordering
+          2. Where the first ordering considers entries equal, they are ordered
+             by the second ordering
+          3. And so on...
+        """
+        return OrderedQuery(self, orderings)
+
+    def __getitem__(self, key):
+        if isinstance(key, tuple):
+            raise TypeError('Multi-dimensional indexing of queries is not supported')
+        # If the key is a single integer, just return the item
+        if isinstance(key, int):
+            return self[key:key + 1].one()
+        # Otherwise, the key is a slice
+        low, high, step = key.start or 0, key.stop, key.step or 1
+        return SlicedQuery(self, low, high, step)
+
+    def aggregate(self, **aggregations):
+        """
+        Applies the given aggregations to the query as a whole, and returns a
+        dictionary mapping aggregation name => value.
+
+        Each aggregation is an object with three methods/properties:
+
+          1. An ``accumulate`` method. The ``accumulate`` method is called once
+             for each entry in the query, and recieves the dn and attribute
+             dictionary as arguments.
+          2. A ``result`` property. The ``result`` property is interrogated once
+             iteration is complete.
+          3. A ``reset`` method that clears any existing result.
+
+        This structure allows multiple aggregations to be calculated in one 'sweep'
+        of the query.
+
+        Some common aggregations are provided in the :py:mod:`~.aggregations` module.
+        For example, to count the number of elements and the maximum and mimimum
+        uidNumber in one sweep, the following could be used:
+
+        ::
+
+            from jasmin_ldap.aggregations import Count, Max, Min
+            print(query.aggregate(count = Count(),
+                                  max_uid = Max('uidNumber'),
+                                  min_uid = Min('uidNumber')))
+            # Prints:
+            #   {'max_uid': [7010004], 'count': [15], 'min_uid': [25157]}
+        """
+        # Before we iterate, reset the aggregations
+        for _, agg in aggregations.items(): agg.reset()
+        # Do the accumulation
+        for dn, attrs in self:
+            for _, agg in aggregations.items():
+                agg.accumulate(dn, attrs)
+        # Return the results
+        return { name : agg.result for name, agg in aggregations.items() }
+
+    def __len__(self):
+        """
+        Returns the number of items in the query.
+        """
+        # To do this, we have to force all the results to be fetched
+        return len(list(iter(self)))
+
+
+class Query(QueryBase):
     """
     A lazily evaluated, filter-able LDAP search query.
 
@@ -41,10 +185,6 @@ class Query:
         # If no filter was given, use a catch-all filter
         self._filter = filter or F(objectClass__present = True)
         self._scope = scope
-
-    ############################################################################
-    ## Methods that fetch data
-    ############################################################################
 
     # Maps the supported lookup types to an LDAP search filter template
     # NOTE: 'in' is also supported, but is handled in _compile, since it needs
@@ -105,76 +245,218 @@ class Query:
         elif isinstance(node, NotNode):
             return '(!{})'.format(self._compile(node.child))
         else:
-            raise ValueError("Unknown node type '{}'".format(type(node).__name__))
+            raise ValueError("Unknown node type '{}'".format(repr(node)))
 
     def __iter__(self):
-        """
-        Returns an iterator of the results from this query.
-        """
+        # Just compile the filter once on first use
+        if not hasattr(self, '_filter_str'):
+            self._filter_str = self._compile(self._filter)
         # We need to make sure we hold on to the connection until we have finished
         # iterating
         # To ensure that the connection gets released when a partial iteration is
         # finished with, we must turn GeneratorExit into StopIteration
         with self._pool.connection() as conn:
             try:
-                yield from conn.search(self._base_dn,
-                                       self._compile(self._filter), self._scope)
+                yield from conn.search(self._base_dn, self._filter_str, self._scope)
             except GeneratorExit:
                 raise StopIteration
 
-    def one(self):
+    def filter(self, *args, **kwargs):
         """
-        Returns a single result from the query, or ``None`` if there is no such
-        object.
+        See :py:meth:`QueryBase.filter`
         """
-        return next(iter(self), None)
+        # Rather than running the filters in Python, run them in LDAP
+        return Query(self._pool, self._base_dn,
+                     self._filter & F(*args, **kwargs), self._scope)
 
-    ############################################################################
-    ## Methods that return a new query instance
-    ############################################################################
+
+class AnnotatedQuery(QueryBase):
+    """
+    An LDAP query with additional annotations.
+
+    :param query: The underlying query
+    :param \*\*annotations: The annotations to apply
+    """
+    def __init__(self, query, annotations):
+        self._query = query
+        self._annotations = dict(annotations)
+
+    def __iter__(self):
+        for dn, attrs in self._query:
+            for attr, func in self._annotations.items():
+                # Make the result of the annotation look like it comes from LDAP
+                # by wrapping it in a list
+                annot = func(dn, attrs)
+                if isinstance(annot, Iterable) and not isinstance(annot, str):
+                    annot = list(annot)
+                else:
+                    annot = [annot]
+                attrs[attr] = annot
+            yield (dn, attrs)
+
+
+class FilteredQuery(QueryBase):
+    """
+    A filtered query where all the filters are applied in Python.
+
+    :param query: The underlying query
+    :param filter: The filter to apply
+    """
+    def __init__(self, query, filter):
+        self._query = query
+        self._filter = filter
+
+    def _compile(self, node):
+        """
+        Recursively compiles a :py:class:`.filters.Node` into a boolean function
+        that operates on an attribute dictionary.
+        """
+        func = None
+        if isinstance(node, Expression):
+            # Use 'exact' as the default lookup type
+            field, lookup, value = node.field, node.lookup_type or 'exact', node.value
+            # present is based on the whole attribute
+            if lookup == 'present':
+                func = lambda attrs: (bool(value) == bool(attrs.get(field, ())))
+            # isnull is the inverse of present
+            elif lookup == 'isnull':
+                func = lambda attrs: (bool(value) != bool(attrs.get(field, ())))
+            # Everything else is element-wise, i.e. is there an element of the
+            # attribute that matches
+            else:
+                # Try not to use regexes unless we have to
+                if lookup == 'in':
+                    elem_func = lambda el: el in value
+                elif lookup == 'exact':
+                    elem_func = lambda el: el == value
+                elif lookup == 'iexact':
+                    elem_func = lambda el: el.lower() == value.lower()
+                elif lookup == 'contains':
+                    elem_func = lambda el: value in el
+                elif lookup == 'icontains' or lookup == 'search':
+                    elem_func = lambda el: value.lower() in el.lower()
+                elif lookup == 'startswith':
+                    elem_func = lambda el: el.startswith(value)
+                elif lookup == 'istartswith' :
+                    elem_func = lambda el: el.lower().startswith(value.lower())
+                elif lookup == 'endswith':
+                    elem_func = lambda el: el.endswith(value)
+                elif lookup == 'iendswith' :
+                    elem_func = lambda el: el.lower().endswith(value.lower())
+                else:
+                    raise ValueError("Unsupported lookup type - {}".format(lookup))
+                func = lambda attrs: any(elem_func(v) for v in attrs.get(field, ()))
+        elif isinstance(node, AndNode):
+            child_funcs = [self._compile(c) for c in node.children]
+            func = lambda attrs: all(f(attrs) for f in child_funcs)
+        elif isinstance(node, OrNode):
+            child_funcs = [self._compile(c) for c in node.children]
+            func = lambda attrs: any(f(attrs) for f in child_funcs)
+        elif isinstance(node, NotNode):
+            child_func = self._compile(node.child)
+            func = lambda attrs: not child_func(attrs)
+        if func is not None:
+            return func
+        else:
+            raise ValueError("Unknown node type '{}'".format(repr(node)))
+
+    def __iter__(self):
+        # Compile the filter once on first use
+        if not hasattr(self, '_filter_func'):
+            self._filter_func = self._compile(self._filter)
+        for dn, attrs in self._query:
+            if self._filter_func(attrs):
+                yield (dn, attrs)
 
     def filter(self, *args, **kwargs):
         """
-        Returns a new query with args combined with this query using AND.
-
-        Positional arguments should be :py:class:`.filters.Node`\ s.
-
-        Keyword arguments should be of the form ``field__lookuptype = value``,
-        similar to the Django ORM. If no lookup type is given, exact is used.
-
-        ::
-
-            from jasmin_ldap.filters import F
-
-            q = Query(...).filter(mail__exact = 'jbloggs@example.com')
-            q = Query(...).filter(F(mail = 'jbloggs@example.com') | F(uid = 'jbloggs'))
+        See :py:meth:`QueryBase.filter`
         """
-        return type(self)(
-            self._pool,
-            self._base_dn,
-            # Combine our filter and a filter built from the args
-            self._filter & F(*args, **kwargs),
-            self._scope
-        )
+        # Rather than having nested FilteredQuery objects, just extend the existing filter
+        return FilteredQuery(self._query, self._filter & F(*args, **kwargs))
 
-    def exclude(self, *args, **kwargs):
+
+class OrderedQuery(QueryBase):
+    """
+    A query with ordering imposed.
+
+    :param query: The underlying query
+    :param orderings: The attributes to use for ordering - a ``-`` prefix indicates
+                      a descending search
+    """
+    def __init__(self, query, orderings):
+        self._query = query
+        self._orderings = orderings
+
+    def _compile(self, orderings):
         """
-        Returns a new query with NOT(args) combined with this query using AND.
-
-        Positional arguments should be :py:class:`.filters.Node` objects.
-
-        Keyword arguments should be of the form ``field__lookuptype = <value>``,
-        similar to the Django ORM.
+        Compiles the given orderings into a comparison function.
         """
-        return self.filter(~F(*args, **kwargs))
+        to_apply = []
+        for o in orderings:
+            descending = False
+            if o.startswith('-'):
+                descending = True
+                o = o[1:]
+            to_apply.append((o, descending))
+        def compare(res1, res2):
+            # res1 and res2 are (dn, attrs) pairs
+            _, attrs1 = res1
+            _, attrs2 = res2
+            # Apply each comparison in order
+            # Note that we consider None to be bigger than anything else (i.e.
+            # in an ascending sort, None comes after everything else)
+            for attr, descending in to_apply:
+                if descending:
+                    x, y = attrs2.get(attr, []), attrs1.get(attr, [])
+                else:
+                    x, y = attrs1.get(attr, []), attrs2.get(attr, [])
+                if x < y:
+                    return -1
+                elif x > y:
+                    return 1
+            return 0
+        return compare
 
-    ############################################################################
-    ## Python magic methods
-    ############################################################################
+    def __iter__(self):
+        # Compile the comparison function
+        if not hasattr(self, '_compare_func'):
+            self._compare_func = self._compile(self._orderings)
+        yield from sorted(self._query, key = cmp_to_key(self._compare_func))
 
-    def __len__(self):
+    def filter(self, *args, **kwargs):
         """
-        Returns the number of items in the query.
+        See :py:meth:`QueryBase.filter`
         """
-        # To do this, we have to force all the results to be fetched
-        return len(list(iter(self)))
+        # Apply the filter to the underlying query
+        return OrderedQuery(self._query.filter(*args, **kwargs), self._orderings)
+
+
+class SlicedQuery(QueryBase):
+    """
+    A slice of a query.
+
+    :param query: The underlying query
+    :param low: The low index for the slice
+    :param high: The high index for the slice
+    :param step: The step for the slice
+    """
+    def __init__(self, query, low, high = None, step = 1):
+        if low < 0 or (high is not None and high < 0) or step < 1:
+            raise TypeError('Negative indexing of queries is not supported')
+        self._query = query
+        self._low = low
+        self._high = high
+        self._step = step
+
+    def __iter__(self):
+        pos = -1
+        for entry in self._query:
+            pos += 1
+            if pos < self._low:
+                continue
+            if self._high is not None and pos >= self._high:
+                break
+            if (pos - self._low) % self._step != 0:
+                continue
+            yield entry
