@@ -14,6 +14,7 @@ import ldap3.utils.conv
 
 from .core import Connection
 from .filters import F, Expression, AndNode, OrNode, NotNode
+from .aggregations import Count
 
 
 class QueryBase(metaclass = abc.ABCMeta):
@@ -32,6 +33,18 @@ class QueryBase(metaclass = abc.ABCMeta):
         object.
         """
         return next(iter(self), None)
+
+    def select(self, *attributes):
+        """
+        Returns a new query that selects only the given attributes from each entry.
+        """
+        return SelectQuery(self, attributes)
+
+    def distinct(self):
+        """
+        Returns a new query that yields only the distinct attribute dictionaries.
+        """
+        return DistinctQuery(self)
 
     def filter(self, *args, **kwargs):
         """
@@ -68,7 +81,7 @@ class QueryBase(metaclass = abc.ABCMeta):
         attributes (annotations).
 
         Each annotation is just a name => callable mapping, where the callable recieves
-        the dn and attribute dictionary as its arguments.
+        the attribute dictionary as its only argument.
 
         Some commonly used annotations are provided in the :py:mod:`~.annotations`
         module.
@@ -119,8 +132,8 @@ class QueryBase(metaclass = abc.ABCMeta):
         Each aggregation is an object with three methods/properties:
 
           1. An ``accumulate`` method. The ``accumulate`` method is called once
-             for each entry in the query, and recieves the dn and attribute
-             dictionary as arguments.
+             for each entry in the query, and recieves the attribute dictionary
+             as its only argument.
           2. A ``result`` property. The ``result`` property is interrogated once
              iteration is complete.
           3. A ``reset`` method that clears any existing result.
@@ -144,9 +157,9 @@ class QueryBase(metaclass = abc.ABCMeta):
         # Before we iterate, reset the aggregations
         for _, agg in aggregations.items(): agg.reset()
         # Do the accumulation
-        for dn, attrs in self:
+        for attrs in self:
             for _, agg in aggregations.items():
-                agg.accumulate(dn, attrs)
+                agg.accumulate(attrs)
         # Return the results
         return { name : agg.result for name, agg in aggregations.items() }
 
@@ -155,7 +168,63 @@ class QueryBase(metaclass = abc.ABCMeta):
         Returns the number of items in the query.
         """
         # To do this, we have to force all the results to be fetched
-        return len(list(iter(self)))
+
+        return self.aggregate(count = Count())['count']
+
+
+class EmptyQuery(QueryBase):
+    """
+    Special class to represent an empty query
+    """
+    def __iter__(self):
+        yield from ()
+
+    def one(self):
+        """
+        See :py:meth:`QueryBase.one`
+        """
+        return None
+
+    def select(self, *attributes):
+        """
+        See :py:meth:`QueryBase.select`
+        """
+        return self
+
+    def distinct(self):
+        """
+        See :py:meth:`QueryBase.distinct`
+        """
+        return self
+
+    def filter(self, *args, **kwargs):
+        """
+        See :py:meth:`QueryBase.filter`
+        """
+        return self
+
+    def annotate(self, **annotations):
+        """
+        See :py:meth:`QueryBase.annotate`
+        """
+        return self
+
+    def order_by(self, *orderings):
+        """
+        See :py:meth:`QueryBase.order_by`
+        """
+        return self
+
+    def __getitem__(self, key):
+        raise IndexError('Index out of range')
+
+    def __len__(self):
+        return 0
+
+    def instance(cls):
+        if not hasattr(cls, '_instance'):
+            cls._instance = cls()
+        return cls._instance
 
 
 class Query(QueryBase):
@@ -187,8 +256,6 @@ class Query(QueryBase):
         self._scope = scope
 
     # Maps the supported lookup types to an LDAP search filter template
-    # NOTE: 'in' is also supported, but is handled in _compile, since it needs
-    #       special treatment
     _LOOKUP_TYPES = {
         'exact'       : '({field}={value})',
         'iexact'      : '({field}={value})',
@@ -206,51 +273,55 @@ class Query(QueryBase):
         '*': '\\2A', '(': '\\28', ')': '\\29', '\\': '\\5C', '\0': '\\00'
     }
 
-    def _compile(self, node):
+    def _compile_filter(self, node):
         """
         Recursively compiles a :py:class:`.filters.Node` into an LDAP query string.
         """
         if isinstance(node, Expression):
             # Use 'exact' as the default lookup type
             field, lookup, value = node.field, node.lookup_type or 'exact', node.value
-            # We support 'in' as a lookup type, but only by mapping it to an OR
+
+            # Decide what filter to use based on lookup type
             if lookup == 'in':
+                # We support 'in' as a lookup type by mapping it to an OR
                 # If no values were given, raise an error
                 if not value:
                     raise ValueError("At least one value required for 'in' lookup")
                 # Convert the values to a list of exact match expressions
                 expressions = [Expression(field, 'exact', v) for v in value]
                 # Combine the expressions using OR and compile the result
-                return self._compile(reduce(or_, expressions))
-            # Present with a false-y value is not present
+                return self._compile_filter(reduce(or_, expressions))
             elif lookup == 'present' and not value:
-                return self._compile(~Expression(field, 'present', True))
-            # isnull is the opposite of present
+                # Present with a false-y value is not present
+                return self._compile_filter(~Expression(field, 'present', True))
             elif lookup == 'isnull':
-                return self._compile(~Expression(field, 'present', value))
-            # Escape any dodgy characters in the value
-            if isinstance(value, bytes):
-                value = ldap3.utils.conv.escape_bytes(value)
+                # isnull is the opposite of present
+                return self._compile_filter(Expression(field, 'present', not value))
             else:
-                value = ''.join(self._ESCAPE_CHARS.get(c, c) for c in str(value))
-            # Insert values into the filter template for the lookup type
-            try:
-                return self._LOOKUP_TYPES[lookup].format(field = field, value = value)
-            except KeyError:
-                raise ValueError("Unsupported lookup type - {}".format(lookup))
+                # All other valid lookup types use patterns from the lookup table
+                # Escape any dodgy characters in the value
+                if isinstance(value, bytes):
+                    value = ldap3.utils.conv.escape_bytes(value)
+                else:
+                    value = ''.join(self._ESCAPE_CHARS.get(c, c) for c in str(value))
+                # Insert values into the filter template for the lookup type
+                try:
+                    return self._LOOKUP_TYPES[lookup].format(field = field, value = value)
+                except KeyError:
+                    raise ValueError("Unsupported lookup type - {}".format(lookup))
         elif isinstance(node, AndNode):
-            return '(&{})'.format(''.join(self._compile(c) for c in node.children))
+            return '(&{})'.format(''.join(self._compile_filter(c) for c in node.children))
         elif isinstance(node, OrNode):
-            return '(|{})'.format(''.join(self._compile(c) for c in node.children))
+            return '(|{})'.format(''.join(self._compile_filter(c) for c in node.children))
         elif isinstance(node, NotNode):
-            return '(!{})'.format(self._compile(node.child))
+            return '(!{})'.format(self._compile_filter(node.child))
         else:
             raise ValueError("Unknown node type '{}'".format(repr(node)))
 
     def __iter__(self):
         # Just compile the filter once on first use
         if not hasattr(self, '_filter_str'):
-            self._filter_str = self._compile(self._filter)
+            self._filter_str = self._compile_filter(self._filter)
         # We need to make sure we hold on to the connection until we have finished
         # iterating
         # To ensure that the connection gets released when a partial iteration is
@@ -261,13 +332,101 @@ class Query(QueryBase):
             except GeneratorExit:
                 raise StopIteration
 
+    def _split_node(self, node):
+        if isinstance(node, Expression):
+            # If the expression uses DN, it must be exact or iexact
+            field, lookup = node.field, node.lookup_type or 'exact'
+            if field.lower() != 'dn':
+                return node, None, None
+            if lookup == 'exact':
+                return None, None, node
+            else:
+                return None, node, None
+        elif isinstance(node, AndNode):
+            # This takes advantage of the fact that, because we are combining with
+            # AND, the ordering doesn't matter
+            ldap, python, dn = [], [], []
+            for n in node.children:
+                _0, _1, _2 = self._split_node(n)
+                if _0: ldap.append(_0)
+                if _1: python.append(_1)
+                if _2: dn.append(_2)
+            if len(dn) >= 2:
+                # If there is more than one DN filter, add them to the python filter
+                python += dn
+                dn = None
+            else:
+                dn = dn[0] if dn else None
+            if len(ldap) >= 2:
+                ldap = AndNode(*ldap)
+            else:
+                ldap = ldap[0] if ldap else None
+            if len(python) >= 2:
+                python = AndNode(*python)
+            else:
+                python = python[0] if python else None
+            return ldap, python, dn
+        elif isinstance(node, OrNode):
+            # Once ORs are involved, we can't split the filter - either the whole
+            # node is applied in LDAP or the whole node is applied in Python
+            for n in node.children:
+                ldap, python, dn = self._split_node(n)
+                if python or dn:
+                    return None, node, None
+            return node, None, None
+        elif isinstance(node, NotNode):
+            # We can't split a NOT query either
+            ldap, python, dn = self._split_node(node.child)
+            if python or dn:
+                return None, node, None
+            return node, None, None
+        else:
+            raise ValueError("Unknown node type '{}'".format(repr(node)))
+
     def filter(self, *args, **kwargs):
         """
         See :py:meth:`QueryBase.filter`
+
+        We want to run as many filters in LDAP as we can.
+
+        However, this becomes more complicated when we want to allow filtering by DN:
+
+          * Any filters not involving DNs can be applied directly to LDAP
+
+          * An exact filter on a single DN, possibly combined with non-DN filters
+            **using AND only**, can be done purely in LDAP by using the DN as the
+            search base with ENTITY scope
+
+          * Any other filters involving DNs (e.g. an OR of a DN with other filters)
+            need to be done in Python (boo)
         """
-        # Rather than running the filters in Python, run them in LDAP
-        return Query(self._pool, self._base_dn,
-                     self._filter & F(*args, **kwargs), self._scope)
+        ldap, python, dn = self._split_node(F(*args, **kwargs))
+        query = self
+        # If there is a DN node, we know it will be a single exact match
+        if dn:
+            if self._scope == Connection.SEARCH_SCOPE_ENTITY:
+                # We are already a single DN search - DNs must match
+                if dn.value.lower() != self._base_dn.lower():
+                    # Filtering on two different DNs combined with AND can never
+                    # have any results, regardless of other filters
+                    return EmptyQuery.instance
+            else:
+                # We are not already a single DN search
+                # The DN must fall under our existing base DN
+                if dn.value.lower().endswith(self._base_dn.lower()):
+                    query = Query(query._pool, dn.value,
+                                  query._filter, Connection.SEARCH_SCOPE_ENTITY)
+                else:
+                    # If the DN is not under the base, there will never be any results
+                    return EmptyQuery.instance
+        # Apply the LDAP filter
+        if ldap:
+            query = Query(query._pool, query._base_dn,
+                          query._filter & ldap, query._scope)
+        # Apply the Python filter
+        if python:
+            query = FilteredQuery(query, python)
+        return query
 
 
 class AnnotatedQuery(QueryBase):
@@ -280,6 +439,12 @@ class AnnotatedQuery(QueryBase):
     def __init__(self, query, annotations):
         self._query = query
         self._annotations = dict(annotations)
+
+    def __iter__(self):
+        for attrs in self._query:
+            for attr, func in self._annotations.items():
+                attrs[attr] = func(attrs)
+            yield attrs
 
     def _split_node(self, node):
         """
@@ -306,23 +471,17 @@ class AnnotatedQuery(QueryBase):
             # AND, the ordering doesn't matter
             left, right = [], []
             for n in node.children:
-                # Note that these nodes can be combined using AND to be equivalent
-                # to n
-                l, r = self._split_node(n)
-                if l: left.append(l)
-                if r: right.append(r)
+                _0, _1 = self._split_node(n)
+                if _0: left.append(_0)
+                if _1: right.append(_1)
             if len(left) >= 2:
                 left = AndNode(*left)
-            elif len(left) == 1:
-                left = left[0]
             else:
-                left = None
+                left = left[0] if left else None
             if len(right) >= 2:
                 right = AndNode(*right)
-            elif len(right) == 1:
-                right = right[0]
             else:
-                right = None
+                right = right[0] if right else None
             return (left, right)
         elif isinstance(node, OrNode):
             # Once ORs are involved, we can't split the query - either the whole
@@ -341,19 +500,6 @@ class AnnotatedQuery(QueryBase):
             return (node, None)
         else:
             raise ValueError("Unknown node type '{}'".format(repr(node)))
-
-    def __iter__(self):
-        for dn, attrs in self._query:
-            for attr, func in self._annotations.items():
-                # Make the result of the annotation look like it comes from LDAP
-                # by wrapping it in a list
-                annot = func(dn, attrs)
-                if isinstance(annot, Iterable) and not isinstance(annot, str):
-                    annot = list(annot)
-                else:
-                    annot = [annot]
-                attrs[attr] = annot
-            yield (dn, attrs)
 
     def filter(self, *args, **kwargs):
         """
@@ -380,21 +526,44 @@ class FilteredQuery(QueryBase):
         self._query = query
         self._filter = filter
 
-    def _compile(self, node):
+    def _compile_filter(self, node):
         """
         Recursively compiles a :py:class:`.filters.Node` into a boolean function
         that operates on an attribute dictionary.
         """
-        func = None
         if isinstance(node, Expression):
             # Use 'exact' as the default lookup type
             field, lookup, value = node.field, node.lookup_type or 'exact', node.value
+            # DNs get special treatment - all lookups are case-insensitive
+            if field.lower() == 'dn':
+                if lookup == 'in':
+                    def in_func(attrs):
+                        return attrs.get(field, '').lower() in [v.lower() for v in value]
+                    return in_func
+                elif lookup.endswith('exact'):
+                    def exact_func(attrs):
+                        return attrs.get(field, '').lower() == value.lower()
+                    return exact_func
+                elif lookup.endswith('contains') or lookup == 'search':
+                    def contains_func(attrs):
+                        return value.lower() in attrs.get(field, '').lower()
+                    return contains_func
+                elif lookup.endswith('startswith'):
+                    def starts_func(attrs):
+                        return attrs.get(field, '').lower().startswith(value.lower())
+                    return starts_func
+                elif lookup.endswith('endswith'):
+                    def ends_func(attrs):
+                        return attrs.get(field, '').lower().endswith(value.lower())
+                    return ends_func
+                else:
+                    raise ValueError("Unsupported lookup type - {}".format(lookup))
             # present is based on the whole attribute
-            if lookup == 'present':
-                func = lambda attrs: (bool(value) == bool(attrs.get(field, ())))
+            elif lookup == 'present':
+                return lambda attrs: (bool(value) == bool(attrs.get(field, ())))
             # isnull is the inverse of present
             elif lookup == 'isnull':
-                func = lambda attrs: (bool(value) != bool(attrs.get(field, ())))
+                return lambda attrs: (bool(value) != bool(attrs.get(field, ())))
             # Everything else is element-wise, i.e. is there an element of the
             # attribute that matches
             else:
@@ -419,28 +588,25 @@ class FilteredQuery(QueryBase):
                     elem_func = lambda el: el.lower().endswith(value.lower())
                 else:
                     raise ValueError("Unsupported lookup type - {}".format(lookup))
-                func = lambda attrs: any(elem_func(v) for v in attrs.get(field, ()))
+                return lambda attrs: any(elem_func(v) for v in attrs.get(field, ()))
         elif isinstance(node, AndNode):
-            child_funcs = [self._compile(c) for c in node.children]
-            func = lambda attrs: all(f(attrs) for f in child_funcs)
+            child_funcs = [self._compile_filter(c) for c in node.children]
+            return lambda attrs: all(f(attrs) for f in child_funcs)
         elif isinstance(node, OrNode):
-            child_funcs = [self._compile(c) for c in node.children]
-            func = lambda attrs: any(f(attrs) for f in child_funcs)
+            child_funcs = [self._compile_filter(c) for c in node.children]
+            return lambda attrs: any(f(attrs) for f in child_funcs)
         elif isinstance(node, NotNode):
-            child_func = self._compile(node.child)
-            func = lambda attrs: not child_func(attrs)
-        if func is not None:
-            return func
-        else:
-            raise ValueError("Unknown node type '{}'".format(repr(node)))
+            child_func = self._compile_filter(node.child)
+            return lambda attrs: not child_func(attrs)
+        raise ValueError("Unknown node type '{}'".format(repr(node)))
 
     def __iter__(self):
         # Compile the filter once on first use
         if not hasattr(self, '_filter_func'):
-            self._filter_func = self._compile(self._filter)
-        for dn, attrs in self._query:
+            self._filter_func = self._compile_filter(self._filter)
+        for attrs in self._query:
             if self._filter_func(attrs):
-                yield (dn, attrs)
+                yield attrs
 
     def filter(self, *args, **kwargs):
         """
@@ -464,7 +630,7 @@ class OrderedQuery(QueryBase):
         self._query = query
         self._orderings = orderings
 
-    def _compile(self, orderings):
+    def _compile_order(self, orderings):
         """
         Compiles the given orderings into a comparison function.
         """
@@ -476,17 +642,15 @@ class OrderedQuery(QueryBase):
                 o = o[1:]
             to_apply.append((o, descending))
         def compare(res1, res2):
-            # res1 and res2 are (dn, attrs) pairs
-            _, attrs1 = res1
-            _, attrs2 = res2
+            # res1 and res2 are attribute dictionaries
             # Apply each comparison in order
             # Note that we consider None to be bigger than anything else (i.e.
             # in an ascending sort, None comes after everything else)
             for attr, descending in to_apply:
                 if descending:
-                    x, y = attrs2.get(attr, []), attrs1.get(attr, [])
+                    x, y = res2.get(attr, []), res1.get(attr, [])
                 else:
-                    x, y = attrs1.get(attr, []), attrs2.get(attr, [])
+                    x, y = res1.get(attr, []), res2.get(attr, [])
                 if x < y:
                     return -1
                 elif x > y:
@@ -497,7 +661,7 @@ class OrderedQuery(QueryBase):
     def __iter__(self):
         # Compile the comparison function
         if not hasattr(self, '_compare_func'):
-            self._compare_func = self._compile(self._orderings)
+            self._compare_func = self._compile_order(self._orderings)
         yield from sorted(self._query, key = cmp_to_key(self._compare_func))
 
     def filter(self, *args, **kwargs):
@@ -527,7 +691,7 @@ class SlicedQuery(QueryBase):
 
     def __iter__(self):
         pos = -1
-        for entry in self._query:
+        for attrs in self._query:
             pos += 1
             if pos < self._low:
                 continue
@@ -535,4 +699,69 @@ class SlicedQuery(QueryBase):
                 break
             if (pos - self._low) % self._step != 0:
                 continue
-            yield entry
+            yield attrs
+
+
+class SelectQuery(QueryBase):
+    """
+    A query with the attributes restricted.
+
+    :param query: The underlying query
+    :param attributes: The attributes to include in results
+    """
+    def __init__(self, query, attributes):
+        self._query = query
+        self._attributes = attributes
+
+    def __iter__(self):
+        for attrs in self._query:
+            yield { k : v for k, v in attrs.items() if k in self._attributes }
+
+    def select(self, *attributes):
+        """
+        See :py:meth:`QueryBase.select`
+        """
+        # There is no point in having directly nested selects
+        return SelectQuery(self._query, attributes)
+
+    def filter(self, *args, **kwargs):
+        """
+        See :py:meth:`QueryBase.filter`
+        """
+        # Apply the filter directly to the underlying query
+        return SelectQuery(self._query.filter(F(*args, **kwargs)), self._attributes)
+
+
+class DistinctQuery(QueryBase):
+    """
+    A query that yields only distinct elements of the underlying query.
+
+    :param query: The underlying query
+    """
+    def __init__(self, query):
+        self._query = query
+
+    def __iter__(self):
+        seen = set()
+        for attrs in self._query:
+            # To put it in a set, we need to convert the entry to something hashable
+            # We don't want to worry about ordering when comparing values, so each
+            # value is also converted to a frozenset
+            hashable = frozenset((k, frozenset(v)) for k, v in attrs.items())
+            if hashable not in seen:
+                seen.add(hashable)
+                yield attrs
+
+    def distinct(self):
+        """
+        See :py:meth:`QueryBase.distinct`
+        """
+        # There is no point in directly nested distinct queries
+        return self
+
+    def filter(self, *args, **kwargs):
+        """
+        See :py:meth:`QueryBase.filter`
+        """
+        # Apply the filter directly to the underlying query
+        return DistinctQuery(self._query.filter(F(*args, **kwargs)))

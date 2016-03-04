@@ -11,7 +11,7 @@ def Count(attribute):
     Returns an annotation that calculates the number of entries for a given
     attribute of an LDAP record.
     """
-    return lambda _, attrs: len(attrs.get(attribute, ()))
+    return lambda attrs: len(attrs.get(attribute, []))
 
 
 def Max(attribute):
@@ -19,10 +19,10 @@ def Max(attribute):
     Returns an annotation that calculates the maximum of the entries for a given
     attribute of an LDAP record.
     """
-    def annot(dn, attrs):
+    def annot(attrs):
         # We want to return None on an empty attribute rather than throwing
         try:
-            return max(attrs.get(attribute, ()))
+            return max(attrs.get(attribute, []))
         except ValueError:
             return None
     return annot
@@ -36,7 +36,7 @@ def Min(attribute):
     def annot(dn, attrs):
         # We want to return None on an empty attribute rather than throwing
         try:
-            return min(attrs.get(attribute, ()))
+            return min(attrs.get(attribute, []))
         except ValueError:
             return None
     return annot

@@ -237,6 +237,8 @@ class Connection:
     SEARCH_SCOPE_SUBTREE      = ldap3.SEARCH_SCOPE_WHOLE_SUBTREE
     #: Scope to search just a single level
     SEARCH_SCOPE_SINGLE_LEVEL = ldap3.SEARCH_SCOPE_SINGLE_LEVEL
+    #: Scope to search for a single entity (allows searching for a DN)
+    SEARCH_SCOPE_ENTITY = ldap3.SEARCH_SCOPE_BASE_OBJECT
 
     @_convert_ldap_errors
     def search(self, base_dn, filter_str, scope = SEARCH_SCOPE_SINGLE_LEVEL):
@@ -244,17 +246,16 @@ class Connection:
         Perform an LDAP search to find entries that match the given LDAP filter
         string under the given base DN and scope.
 
-        Returns an iterable of tuples, where each tuple contains ``(dn, attributes)``.
-
-        ``attributes`` is a dictionary mapping attribute name to a **list of values**
-        for that attribute. Note that a list of values is **always** returned,
-        even when there is only value.
+        Returns an iterable of attribute dictionaries. The attribute dictionary
+        maps attribute names to a **list of values** for that attribute, even
+        when there is only one value.
 
         :param base_dn: The base DN for the search
         :param filter_str: The LDAP filter string for the search
-        :param scope: The search scope, one of ``Connection.SEARCH_SCOPE_SUBTREE``
-                      and ``Connection.SEARCH_SCOPE_SINGLE_LEVEL`` (optional)
-        :returns: An iterable of ``(dn, attributes)`` tuples
+        :param scope: The search scope, one of ``Connection.SEARCH_SCOPE_SUBTREE``,
+                      ``Connection.SEARCH_SCOPE_SINGLE_LEVEL`` or
+                      ``Connection.SEARCH_SCOPE_ENTITY`` (optional)
+        :returns: An iterable of attribute dictionaries
         """
         try:
             # Get a generator of results using a paged search
@@ -270,7 +271,9 @@ class Connection:
             for entry in entries:
                 # Try to convert each attribute to numeric values
                 attrs = { k : _convert(v) for k, v in entry['attributes'].items() }
-                yield (entry['dn'], attrs)
+                # Add the dn to the attribute dictionary before yielding
+                attrs['dn'] = entry['dn']
+                yield attrs
         except ldap3.LDAPNoSuchObjectResult as e:
             # NoSuchObject means an empty search
             return

@@ -16,10 +16,10 @@ class Count:
     def reset(self):
         # Note - to make the result look like any other LDAP attribute, we wrap
         # it in a list
-        self.result = [0]
+        self.result = 0
 
-    def accumulate(self, dn, attrs):
-        self.result[0] += 1
+    def accumulate(self, attrs):
+        self.result += 1
 
 
 class Max:
@@ -33,13 +33,15 @@ class Max:
         self.reset()
 
     def reset(self):
-        self.result = []
+        self.result = None
 
-    def accumulate(self, dn, attrs):
-        value = attrs.get(self._attribute, [])
-        # The value only affects the result if it is non-empty
-        if value:
-            self.result = max(self.result, value)
+    def accumulate(self, attrs):
+        try:
+            value = max(attrs.get(self._attribute, []))
+        except ValueError:
+            # If the attribute has no values, exclude it from results
+            return
+        self.result = value if self.result is None else max(self.result, value)
 
 
 class Min:
@@ -53,14 +55,12 @@ class Min:
         self.reset()
 
     def reset(self):
-        self.result = []
+        self.result = None
 
-    def accumulate(self, dn, attrs):
-        value = attrs.get(self._attribute, [])
-        # The value only affects the result if it is non-empty
-        if value:
-            # If the current result is the empty list, use the value
-            if self.result:
-                self.result = min(self.result, value)
-            else:
-                self.result = value
+    def accumulate(self, attrs):
+        try:
+            value = min(attrs.get(self._attribute, []))
+        except ValueError:
+            # If the attribute has no values, exclude it from results
+            return
+        self.result = value if self.result is None else min(self.result, value)

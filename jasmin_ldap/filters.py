@@ -142,6 +142,9 @@ class AndNode(Node):
         children = self._children + (other, )
         return AndNode(*children)
 
+    def __repr__(self):
+        return 'AndNode<{}>'.format(', '.join(repr(c) for c in self._children))
+
 
 class OrNode(Node):
     """
@@ -164,6 +167,9 @@ class OrNode(Node):
         children = self._children + (other, )
         return OrNode(*children)
 
+    def __repr__(self):
+        return 'OrNode<{}>'.format(', '.join(repr(c) for c in self._children))
+
 
 class NotNode(Node):
     """
@@ -184,3 +190,6 @@ class NotNode(Node):
     def not_(self):
         # Customise NOT to just return the underlying node
         return self._child
+
+    def __repr__(self):
+        return 'NotNode<{}>'.format(repr(self.child))
