@@ -212,6 +212,19 @@ def _convert(values):
         return values
 
 
+def _is_empty(value):
+    """
+    Returns True if a value is considered non-empty, False otherwise.
+    """
+    if isinstance(value, Iterable) and not isinstance(value, str):
+        return not bool(value)
+    elif value is None:
+        return True
+    elif value == '':
+        return True
+    return False
+
+
 class Connection:
     """
     Represents an authenticated LDAP connection.
@@ -224,7 +237,7 @@ class Connection:
 
         from contextlib import closing
 
-        server = Server('ldap://ldap.mycompany.com')
+        s = Server('ldap://ldap.mycompany.com')
         with closing(s.authenticate(user, passwd)) as c:
             # ... do something ...
 
@@ -296,7 +309,7 @@ class Connection:
         :returns: ``True`` on success (should raise on failure)
         """
         # Prepare the attributes for insertion by removing any keys with empty values
-        attributes = { k : v for k, v in attributes.items() if v }
+        attributes = { k : v for k, v in attributes.items() if not _is_empty(v) }
         self._conn.add(dn, attributes = attributes)
         return True
 
@@ -314,7 +327,10 @@ class Connection:
         def to_tuple(value):
             if isinstance(value, Iterable) and not isinstance(value, str):
                 return tuple(value)
-            return (value, )
+            elif _is_empty(value):
+                return ()
+            else:
+                return (value, )
         # Indicate that the attributes should replace any existing attributes
         attributes = {
             name : (ldap3.MODIFY_REPLACE, to_tuple(value))
