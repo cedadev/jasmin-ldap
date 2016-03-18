@@ -360,7 +360,19 @@ class Connection:
         :param new_dn: The new DN of the item
         :returns: ``True`` on success (should raise on failure)
         """
-        raise NotImplementedError
+        # This is implemented as an add + a remove
+        # First, get the attributes of the existing entry
+        try:
+            existing = next(self.search(old_dn, '(objectClass=*)', self.SEARCH_SCOPE_ENTITY))
+            existing.pop('dn')
+            existing.pop('cn')
+        except StopIteration:
+            raise NoSuchObjectError('No object at {}'.format(old_dn))
+        # Create the new entry
+        self.create_entry(new_dn, existing)
+        # Remove the old entry
+        self.delete_entry(old_dn)
+        return True
 
     @_convert_ldap_errors
     def delete_entry(self, dn):
