@@ -368,10 +368,10 @@ class Connection:
             existing.pop('cn')
         except StopIteration:
             raise NoSuchObjectError('No object at {}'.format(old_dn))
-        # Create the new entry
-        self.create_entry(new_dn, existing)
         # Remove the old entry
         self.delete_entry(old_dn)
+        # Create the new entry
+        self.create_entry(new_dn, existing)
         return True
 
     @_convert_ldap_errors
