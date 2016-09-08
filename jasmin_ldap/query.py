@@ -22,10 +22,22 @@ class QueryBase(metaclass = abc.ABCMeta):
     Base class containing functionality common to all query types.
     """
     @abc.abstractmethod
+    def _run_query(self):
+        """
+        Returns an iterator of the results of the query.
+        """
+
+    @property
+    def _cached(self):
+        if not hasattr(self, '_cache'):
+            self._cache = list(self._run_query())
+        return self._cache
+
     def __iter__(self):
         """
-        Returns an iterator of the results from this query.
+        Caches query results on first iteration and returns cache.
         """
+        return iter(self._cached)
 
     def one(self):
         """
@@ -168,15 +180,14 @@ class QueryBase(metaclass = abc.ABCMeta):
         Returns the number of items in the query.
         """
         # To do this, we have to force all the results to be fetched
-
-        return self.aggregate(count = Count())['count']
+        return len(self._cached)
 
 
 class EmptyQuery(QueryBase):
     """
     Special class to represent an empty query
     """
-    def __iter__(self):
+    def _run_query(self):
         yield from ()
 
     def one(self):
@@ -237,7 +248,7 @@ class Query(QueryBase):
     Results are **not** cached, so results may change between iterations. To
     retrieve all the results as a list for caching, just use ``list(query)``.
 
-    :param pool: The :py:class:`.core.ConnectionPool` to use
+    :param conn: The :py:class:`.core.Connection` to use
     :param base_dn: The base DN for the search
     :param filter: A :py:class:`.filters.Node` for the filter to apply (optional)
     :param scope: The scope of the search (optional, one of ``SCOPE_SUBTREE`` or
@@ -248,8 +259,8 @@ class Query(QueryBase):
     #: Scope to search just a single level
     SCOPE_SINGLE_LEVEL = Connection.SEARCH_SCOPE_SINGLE_LEVEL
 
-    def __init__(self, pool, base_dn, filter = None, scope = SCOPE_SINGLE_LEVEL):
-        self._pool = pool
+    def __init__(self, conn, base_dn, filter = None, scope = SCOPE_SINGLE_LEVEL):
+        self._conn = conn
         self._base_dn = base_dn
         # If no filter was given, use a catch-all filter
         self._filter = filter or F(objectClass__present = True)
@@ -318,19 +329,10 @@ class Query(QueryBase):
         else:
             raise ValueError("Unknown node type '{}'".format(repr(node)))
 
-    def __iter__(self):
-        # Just compile the filter once on first use
-        if not hasattr(self, '_filter_str'):
-            self._filter_str = self._compile_filter(self._filter)
-        # We need to make sure we hold on to the connection until we have finished
-        # iterating
-        # To ensure that the connection gets released when a partial iteration is
-        # finished with, we must turn GeneratorExit into StopIteration
-        with self._pool.connection() as conn:
-            try:
-                yield from conn.search(self._base_dn, self._filter_str, self._scope)
-            except GeneratorExit:
-                raise StopIteration
+    def _run_query(self):
+        return self._conn.search(self._base_dn,
+                                 self._compile_filter(self._filter),
+                                 self._scope)
 
     def _split_node(self, node):
         if isinstance(node, Expression):
@@ -414,14 +416,14 @@ class Query(QueryBase):
                 # We are not already a single DN search
                 # The DN must fall under our existing base DN
                 if dn.value.lower().endswith(self._base_dn.lower()):
-                    query = Query(query._pool, dn.value,
+                    query = Query(query._conn, dn.value,
                                   query._filter, Connection.SEARCH_SCOPE_ENTITY)
                 else:
                     # If the DN is not under the base, there will never be any results
                     return EmptyQuery.instance
         # Apply the LDAP filter
         if ldap:
-            query = Query(query._pool, query._base_dn,
+            query = Query(query._conn, query._base_dn,
                           query._filter & ldap, query._scope)
         # Apply the Python filter
         if python:
@@ -440,7 +442,7 @@ class AnnotatedQuery(QueryBase):
         self._query = query
         self._annotations = dict(annotations)
 
-    def __iter__(self):
+    def _run_query(self):
         for attrs in self._query:
             for attr, func in self._annotations.items():
                 attrs[attr] = func(attrs)
@@ -600,12 +602,10 @@ class FilteredQuery(QueryBase):
             return lambda attrs: not child_func(attrs)
         raise ValueError("Unknown node type '{}'".format(repr(node)))
 
-    def __iter__(self):
-        # Compile the filter once on first use
-        if not hasattr(self, '_filter_func'):
-            self._filter_func = self._compile_filter(self._filter)
+    def _run_query(self):
+        filter_func = self._compile_filter(self._filter)
         for attrs in self._query:
-            if self._filter_func(attrs):
+            if filter_func(attrs):
                 yield attrs
 
     def filter(self, *args, **kwargs):
@@ -658,11 +658,9 @@ class OrderedQuery(QueryBase):
             return 0
         return compare
 
-    def __iter__(self):
-        # Compile the comparison function
-        if not hasattr(self, '_compare_func'):
-            self._compare_func = self._compile_order(self._orderings)
-        yield from sorted(self._query, key = cmp_to_key(self._compare_func))
+    def _run_query(self):
+        compare_func = self._compile_order(self._orderings)
+        yield from sorted(self._query, key = cmp_to_key(compare_func))
 
     def filter(self, *args, **kwargs):
         """
@@ -689,7 +687,7 @@ class SlicedQuery(QueryBase):
         self._high = high
         self._step = step
 
-    def __iter__(self):
+    def _run_query(self):
         pos = -1
         for attrs in self._query:
             pos += 1
@@ -713,7 +711,7 @@ class SelectQuery(QueryBase):
         self._query = query
         self._attributes = attributes
 
-    def __iter__(self):
+    def _run_query(self):
         for attrs in self._query:
             yield { k : v for k, v in attrs.items() if k in self._attributes }
 
@@ -741,7 +739,7 @@ class DistinctQuery(QueryBase):
     def __init__(self, query):
         self._query = query
 
-    def __iter__(self):
+    def _run_query(self):
         seen = set()
         for attrs in self._query:
             # To put it in a set, we need to convert the entry to something hashable

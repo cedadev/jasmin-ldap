@@ -6,12 +6,16 @@ is intended to be more intuitive and easier to mock.
 __author__ = "Matt Pryor"
 __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 
+import logging
 import contextlib, queue, functools
 from collections import Iterable
 
 import ldap3
 
 from .exceptions import *
+
+
+_log = logging.getLogger(__name__)
 
 
 class Server:
@@ -36,6 +40,7 @@ class Server:
         :returns: The authenticated :py:class:`Connection`
         """
         try:
+            _log.debug('Opening LDAP connection to {} for {}'.format(self._server, user))
             return Connection(ldap3.Connection(
                 self._server, user = user, password = password,
                 auto_bind = ldap3.AUTO_BIND_TLS_BEFORE_BIND,
@@ -270,6 +275,7 @@ class Connection:
                       ``Connection.SEARCH_SCOPE_ENTITY`` (optional)
         :returns: An iterable of attribute dictionaries
         """
+        _log.debug('Performing LDAP search (base_dn: {}, filter: {})'.format(base_dn, filter_str))
         try:
             # Get a generator of results using a paged search
             # This saves memory for large result sets
@@ -308,6 +314,7 @@ class Connection:
         :param attributes: The attributes to give the new entry
         :returns: ``True`` on success (should raise on failure)
         """
+        _log.debug('Creating LDAP entry at dn {}'.format(dn))
         # Prepare the attributes for insertion by removing any keys with empty values
         attributes = { k : v for k, v in attributes.items() if not _is_empty(v) }
         self._conn.add(dn, attributes = attributes)
@@ -324,6 +331,7 @@ class Connection:
         :param attributes: The attributes to update on the entry
         :returns: ``True`` on success (should raise on failure)
         """
+        _log.debug('Updating LDAP entry at dn {}'.format(dn))
         def to_tuple(value):
             if isinstance(value, Iterable) and not isinstance(value, str):
                 return tuple(value)
@@ -348,6 +356,7 @@ class Connection:
         :param password: The plaintext password
         :returns: ``True`` on success (should raise on failure)
         """
+        _log.debug('Updating password for dn {}'.format(dn))
         self._conn.extend.standard.modify_password(dn, None, password)
         return True
 
@@ -360,6 +369,7 @@ class Connection:
         :param new_dn: The new DN of the item
         :returns: ``True`` on success (should raise on failure)
         """
+        _log.debug('Renaming LDAP entry from {} to {}'.format(old_dn, new_dn))
         # This is implemented as an add + a remove
         # First, get the attributes of the existing entry
         try:
@@ -382,6 +392,7 @@ class Connection:
         :param dn: The DN to delete
         :returns: ``True`` on success (should raise on failure)
         """
+        _log.debug('Deleting LDAP entry at dn {}'.format(dn))
         self._conn.delete(dn)
         return True
 
@@ -392,5 +403,6 @@ class Connection:
 
         :returns: ``True`` on success (should raise on failure)
         """
+        _log.debug('Closing LDAP connection')
         self._conn.unbind()
         return True
