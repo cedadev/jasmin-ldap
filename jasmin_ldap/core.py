@@ -46,11 +46,11 @@ class Server:
                 auto_bind = ldap3.AUTO_BIND_TLS_BEFORE_BIND,
                 raise_exceptions = True
             ))
-        except ldap3.LDAPOperationResult as e:
+        except ldap3.core.exceptions.LDAPOperationResult as e:
             # If the bind fails as a result of an operation failure (not a
             # connection error or similar), treat that as an auth failure
             raise AuthenticationError('Authentication failed') from e
-        except ldap3.LDAPException as e:
+        except ldap3.core.exceptions.LDAPException as e:
             raise LDAPError('Error while opening connection') from e
 
 
@@ -185,15 +185,15 @@ def _convert_ldap_errors(f):
     def wrapper(*args, **kwargs):
         try:
             return f(*args, **kwargs)
-        except ldap3.LDAPEntryAlreadyExistsResult as e:
+        except ldap3.core.exceptions.LDAPEntryAlreadyExistsResult as e:
             raise ObjectAlreadyExistsError('Object already exists') from e
-        except ldap3.LDAPNoSuchObjectResult as e:
+        except ldap3.core.exceptions.LDAPNoSuchObjectResult as e:
             raise NoSuchObjectError('Object does not exist') from e
-        except ldap3.LDAPObjectClassViolationResult as e:
+        except ldap3.core.exceptions.LDAPObjectClassViolationResult as e:
             raise SchemaViolationError('Schema violation occured') from e
-        except ldap3.LDAPStrongerAuthRequiredResult as e:
+        except ldap3.core.exceptions.LDAPStrongerAuthRequiredResult as e:
             raise PermissionDeniedError('Permission denied') from e
-        except ldap3.LDAPException as e:
+        except ldap3.core.exceptions.LDAPException as e:
             raise LDAPError('An LDAP error occured') from e
     return wrapper
 
@@ -205,17 +205,15 @@ def _convert(values):
 
     If the conversion fails for any element, the original strings are returned.
     """
-    def _f(values):
-        for v in values:
+    def _f(v):
+        try:
+            return int(v)
+        except ValueError:
             try:
-                yield int(v)
+                return float(v)
             except ValueError:
-                yield float(v)
-    try:
-        return list(_f(values))
-    except ValueError:
-        return values
-
+                return v.decode('utf-8')
+    return [_f(v) for v in values]
 
 def _is_empty(value):
     """
@@ -252,11 +250,11 @@ class Connection:
         self._conn = conn
 
     #: Scope to search entire subtree
-    SEARCH_SCOPE_SUBTREE      = ldap3.SEARCH_SCOPE_WHOLE_SUBTREE
+    SEARCH_SCOPE_SUBTREE      = ldap3.SUBTREE
     #: Scope to search just a single level
-    SEARCH_SCOPE_SINGLE_LEVEL = ldap3.SEARCH_SCOPE_SINGLE_LEVEL
+    SEARCH_SCOPE_SINGLE_LEVEL = ldap3.LEVEL
     #: Scope to search for a single entity (allows searching for a DN)
-    SEARCH_SCOPE_ENTITY = ldap3.SEARCH_SCOPE_BASE_OBJECT
+    SEARCH_SCOPE_ENTITY = ldap3.BASE
 
     @_convert_ldap_errors
     def search(self, base_dn, filter_str, scope = SEARCH_SCOPE_SINGLE_LEVEL):
@@ -289,20 +287,20 @@ class Connection:
             )
             for entry in entries:
                 # Try to convert each attribute to numeric values
-                attrs = { k : _convert(v) for k, v in entry['attributes'].items() }
+                attrs = { k : _convert(v) for k, v in entry['raw_attributes'].items() }
                 # Add the dn to the attribute dictionary before yielding
                 attrs['dn'] = entry['dn']
                 yield attrs
-        except ldap3.LDAPNoSuchObjectResult as e:
+        except ldap3.core.exceptions.LDAPNoSuchObjectResult as e:
             # NoSuchObject means an empty search
             return
-        except ldap3.LDAPEntryAlreadyExistsResult as e:
+        except ldap3.core.exceptions.LDAPEntryAlreadyExistsResult as e:
             raise ObjectAlreadyExistsError('Object already exists') from e
-        except ldap3.LDAPObjectClassViolationResult as e:
+        except ldap3.core.exceptions.LDAPObjectClassViolationResult as e:
             raise SchemaViolationError('Schema violation occured') from e
-        except ldap3.LDAPStrongerAuthRequiredResult as e:
+        except ldap3.core.exceptions.LDAPStrongerAuthRequiredResult as e:
             raise PermissionDeniedError('Permission denied') from e
-        except ldap3.LDAPException as e:
+        except ldap3.core.exceptions.LDAPException as e:
             raise LDAPError('An LDAP error occured') from e
 
     @_convert_ldap_errors
