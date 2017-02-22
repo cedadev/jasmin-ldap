@@ -336,10 +336,16 @@ class Query(QueryBase):
 
     def _split_node(self, node):
         if isinstance(node, Expression):
-            # If the expression uses DN, it must be exact or iexact
             field, lookup = node.field, node.lookup_type or 'exact'
+            # Comparison operators are not supported in LDAP, but we support them
+            # in Python
+            if lookup in ['gt', 'gte', 'lt', 'lte']:
+                return None, node, None
+            # Any lookups that are not for DN can be done in LDAP
             if field.lower() != 'dn':
                 return node, None, None
+            # DN lookups have to be exact to be done natively
+            # Any other DN lookups are done in Python
             if lookup == 'exact':
                 return None, None, node
             else:
@@ -588,6 +594,14 @@ class FilteredQuery(QueryBase):
                     elem_func = lambda el: el.endswith(value)
                 elif lookup == 'iendswith' :
                     elem_func = lambda el: el.lower().endswith(value.lower())
+                elif lookup == 'gt':
+                    elem_func = lambda el: el > value
+                elif lookup == 'gte':
+                    elem_func = lambda el: el >= value
+                elif lookup == 'lt':
+                    elem_func = lambda el: el < value
+                elif lookup == 'lte':
+                    elem_func = lambda el: el <= value
                 else:
                     raise ValueError("Unsupported lookup type - {}".format(lookup))
                 return lambda attrs: any(elem_func(v) for v in attrs.get(field, ()))
