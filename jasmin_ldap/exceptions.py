@@ -9,10 +9,19 @@ __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 class LDAPError(Exception):
     """
     Raised when an LDAP error occurs.
+    """
 
-    Will **always** be raised with the underlying
-    `ldap3 exception <https://ldap3.readthedocs.org/exceptions.html>`_ as the
-    cause using the ``raise ... from`` syntax.
+
+class ConnectionError(LDAPError):
+    """
+    Raised when there is an error with the LDAP connection itself, as opposed to
+    a problem executing an operation (see :py:class:`OperationalError`).
+    """
+
+
+class NoServerAvailableError(ConnectionError):
+    """
+    Raised when a connection cannot be established to a suitable server.
     """
 
 
@@ -20,6 +29,13 @@ class OperationalError(LDAPError):
     """
     Raised when an operational error occurs, i.e. an error that results from a
     bad request rather than a problem with the connection per-se.
+    """
+
+
+class OperationNotAllowedError(OperationalError):
+    """
+    Raised when an attempt is made to perform an operation that is not allowed,
+    i.e. attempting a write operation on a read-only connection.
     """
 
 
