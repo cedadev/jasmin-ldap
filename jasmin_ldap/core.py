@@ -312,10 +312,11 @@ class Connection:
         if mode not in [cls.MODE_READONLY, cls.MODE_READWRITE]:
             raise ValueError('Invalid mode given')
         # In read-write mode, we can only choose the primary
-        # Otherwise, try and use the replicas in a random order first
+        # In read-only mode, try and use the primary first (as it has the canonical
+        # view of the data), but fall back to replicas if not available
         servers = list(pool.replicas) if mode is cls.MODE_READONLY else []
         random.shuffle(servers)
-        servers.append(pool.primary)
+        servers.insert(0, pool.primary)
         # Try each server until we get a successful connection
         for server in servers:
             try:
