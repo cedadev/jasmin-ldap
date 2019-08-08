@@ -279,10 +279,6 @@ class Query(QueryBase):
         'present'     : '({field}=*)',
         'search'      : '({field}=*{value}*)',
     }
-    # Characters that need escaping in values for filter expressions
-    _ESCAPE_CHARS = {
-        '*': '\\2A', '(': '\\28', ')': '\\29', '\\': '\\5C', '\0': '\\00'
-    }
 
     def _compile_filter(self, node):
         """
@@ -314,7 +310,7 @@ class Query(QueryBase):
                 if isinstance(value, bytes):
                     value = ldap3.utils.conv.escape_bytes(value)
                 else:
-                    value = ''.join(self._ESCAPE_CHARS.get(c, c) for c in str(value))
+                    value = ldap3.utils.conv.escape_filter_chars(str(value))
                 # Insert values into the filter template for the lookup type
                 try:
                     return self._LOOKUP_TYPES[lookup].format(field = field, value = value)
