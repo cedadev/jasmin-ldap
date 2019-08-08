@@ -40,8 +40,8 @@ class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
             return ldap3.Server(server, connect_timeout = self.DEFAULT_CONNECT_TIMEOUT)
         super().__new__(
             cls,
-            self._as_server(primary) if primary else None,
-            tuple(self._as_server(s) for s in (replicas or []))
+            as_server(primary) if primary else None,
+            tuple(as_server(s) for s in (replicas or []))
         )
 
 
