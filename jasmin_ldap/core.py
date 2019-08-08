@@ -33,18 +33,15 @@ class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
     """
     DEFAULT_CONNECT_TIMEOUT = 1.0
 
-    def __init__(self, primary = None, replicas = None):
-        super().__init__(
+    def __new__(cls, primary = None, replicas = None):
+        def as_server(server):
+            if isinstance(server, ldap3.Server):
+                return server
+            return ldap3.Server(server, connect_timeout = self.DEFAULT_CONNECT_TIMEOUT)
+        super().__new__(
+            cls,
             self._as_server(primary) if primary else None,
             tuple(self._as_server(s) for s in (replicas or []))
-        )
-
-    def _as_server(self, server):
-        if isinstance(server, ldap3.Server):
-            return server
-        return ldap3.Server(
-            server,
-            connect_timeout = self.DEFAULT_CONNECT_TIMEOUT
         )
 
 
