@@ -168,7 +168,7 @@ class QueryBase(metaclass = abc.ABCMeta):
         """
         # Before we iterate, reset the aggregations
         for _, agg in aggregations.items(): agg.reset()
-        # Do the accumulation
+        # Do the accumulation
         for attrs in self:
             for _, agg in aggregations.items():
                 agg.accumulate(attrs)
@@ -292,7 +292,7 @@ class Query(QueryBase):
             # Use 'exact' as the default lookup type
             field, lookup, value = node.field, node.lookup_type or 'exact', node.value
 
-            # Decide what filter to use based on lookup type
+            # Decide what filter to use based on lookup type
             if lookup == 'in':
                 # We support 'in' as a lookup type by mapping it to an OR
                 # If no values were given, raise an error
@@ -303,7 +303,7 @@ class Query(QueryBase):
                 # Combine the expressions using OR and compile the result
                 return self._compile_filter(reduce(or_, expressions))
             elif lookup == 'present' and not value:
-                # Present with a false-y value is not present
+                # Present with a false-y value is not present
                 return self._compile_filter(~Expression(field, 'present', True))
             elif lookup == 'isnull':
                 # isnull is the opposite of present
@@ -337,15 +337,15 @@ class Query(QueryBase):
     def _split_node(self, node):
         if isinstance(node, Expression):
             field, lookup = node.field, node.lookup_type or 'exact'
-            # Comparison operators are not supported in LDAP, but we support them
-            # in Python
+            # Comparison operators are not supported in LDAP, but we support them
+            # in Python
             if lookup in ['gt', 'gte', 'lt', 'lte']:
                 return None, node, None
-            # Any lookups that are not for DN can be done in LDAP
+            # Any lookups that are not for DN can be done in LDAP
             if field.lower() != 'dn':
                 return node, None, None
-            # DN lookups have to be exact to be done natively
-            # Any other DN lookups are done in Python
+            # DN lookups have to be exact to be done natively
+            # Any other DN lookups are done in Python
             if lookup == 'exact':
                 return None, None, node
             else:
@@ -375,7 +375,7 @@ class Query(QueryBase):
                 python = python[0] if python else None
             return ldap, python, dn
         elif isinstance(node, OrNode):
-            # Once ORs are involved, we can't split the filter - either the whole
+            # Once ORs are involved, we can't split the filter - either the whole
             # node is applied in LDAP or the whole node is applied in Python
             for n in node.children:
                 ldap, python, dn = self._split_node(n)
@@ -383,7 +383,7 @@ class Query(QueryBase):
                     return None, node, None
             return node, None, None
         elif isinstance(node, NotNode):
-            # We can't split a NOT query either
+            # We can't split a NOT query either
             ldap, python, dn = self._split_node(node.child)
             if python or dn:
                 return None, node, None
@@ -410,28 +410,28 @@ class Query(QueryBase):
         """
         ldap, python, dn = self._split_node(F(*args, **kwargs))
         query = self
-        # If there is a DN node, we know it will be a single exact match
+        # If there is a DN node, we know it will be a single exact match
         if dn:
             if self._scope == Connection.SEARCH_SCOPE_ENTITY:
                 # We are already a single DN search - DNs must match
                 if dn.value.lower() != self._base_dn.lower():
-                    # Filtering on two different DNs combined with AND can never
+                    # Filtering on two different DNs combined with AND can never
                     # have any results, regardless of other filters
                     return EmptyQuery.instance
             else:
-                # We are not already a single DN search
+                # We are not already a single DN search
                 # The DN must fall under our existing base DN
                 if dn.value.lower().endswith(self._base_dn.lower()):
                     query = Query(query._conn, dn.value,
                                   query._filter, Connection.SEARCH_SCOPE_ENTITY)
                 else:
-                    # If the DN is not under the base, there will never be any results
+                    # If the DN is not under the base, there will never be any results
                     return EmptyQuery.instance
         # Apply the LDAP filter
         if ldap:
             query = Query(query._conn, query._base_dn,
                           query._filter & ldap, query._scope)
-        # Apply the Python filter
+        # Apply the Python filter
         if python:
             query = FilteredQuery(query, python)
         return query
@@ -469,7 +469,7 @@ class AnnotatedQuery(QueryBase):
         if isinstance(node, Expression):
             if node.field in self._annotations:
                 # If the node is querying an annotation it has to be applied to
-                # the annotated query
+                # the annotated query
                 return (None, node)
             else:
                 # Otherwise, it can be applied to the underlying query
@@ -492,7 +492,7 @@ class AnnotatedQuery(QueryBase):
                 right = right[0] if right else None
             return (left, right)
         elif isinstance(node, OrNode):
-            # Once ORs are involved, we can't split the query - either the whole
+            # Once ORs are involved, we can't split the query - either the whole
             # node is applied to the underlying query or the whole node is applied
             # to this query directly
             for n in node.children:
@@ -501,7 +501,7 @@ class AnnotatedQuery(QueryBase):
                     return (None, node)
             return (node, None)
         elif isinstance(node, NotNode):
-            # We can't split a NOT query either
+            # We can't split a NOT query either
             left, right = self._split_node(node.child)
             if right:
                 return (None, node)
@@ -513,11 +513,11 @@ class AnnotatedQuery(QueryBase):
         """
         See :py:meth:`QueryBase.filter`
         """
-        # Split the node into a part that can be applied to the underlying query
+        # Split the node into a part that can be applied to the underlying query
         # and a part that requires the annotations
         # We do this to push as much filtering into LDAP as possible
         left, right = self._split_node(F(*args, **kwargs))
-        # Apply the left filter to the underlying query if there is one
+        # Apply the left filter to the underlying query if there is one
         q = AnnotatedQuery(self._query.filter(left), self._annotations) if left else self
         # Apply the right hand filter to the annotated query
         return FilteredQuery(q, right) if right else q
@@ -542,7 +542,7 @@ class FilteredQuery(QueryBase):
         if isinstance(node, Expression):
             # Use 'exact' as the default lookup type
             field, lookup, value = node.field, node.lookup_type or 'exact', node.value
-            # DNs get special treatment - all lookups are case-insensitive
+            # DNs get special treatment - all lookups are case-insensitive
             if field.lower() == 'dn':
                 if lookup == 'in':
                     def in_func(attrs):
@@ -566,14 +566,14 @@ class FilteredQuery(QueryBase):
                     return ends_func
                 else:
                     raise ValueError("Unsupported lookup type - {}".format(lookup))
-            # present is based on the whole attribute
+            # present is based on the whole attribute
             elif lookup == 'present':
                 return lambda attrs: (bool(value) == bool(attrs.get(field, ())))
-            # isnull is the inverse of present
+            # isnull is the inverse of present
             elif lookup == 'isnull':
                 return lambda attrs: (bool(value) != bool(attrs.get(field, ())))
             # Everything else is element-wise, i.e. is there an element of the
-            # attribute that matches
+            # attribute that matches
             else:
                 # Try not to use regexes unless we have to
                 if lookup == 'in':
@@ -627,7 +627,7 @@ class FilteredQuery(QueryBase):
         See :py:meth:`QueryBase.filter`
         """
         # Apply the filter to the underlying query
-        # This risks having nested FilteredQuerys for the advantage of pushing as
+        # This risks having nested FilteredQuerys for the advantage of pushing as
         # much filtering into LDAP as possible
         return FilteredQuery(self._query.filter(F(*args, **kwargs)), self._filter)
 
@@ -657,9 +657,9 @@ class OrderedQuery(QueryBase):
             to_apply.append((o, descending))
         def compare(res1, res2):
             # res1 and res2 are attribute dictionaries
-            # Apply each comparison in order
+            # Apply each comparison in order
             # Note that we consider None to be bigger than anything else (i.e.
-            # in an ascending sort, None comes after everything else)
+            # in an ascending sort, None comes after everything else)
             for attr, descending in to_apply:
                 if descending:
                     x, y = res2.get(attr, []), res1.get(attr, [])
@@ -680,7 +680,7 @@ class OrderedQuery(QueryBase):
         """
         See :py:meth:`QueryBase.filter`
         """
-        # Apply the filter to the underlying query
+        # Apply the filter to the underlying query
         return OrderedQuery(self._query.filter(*args, **kwargs), self._orderings)
 
 
@@ -733,14 +733,14 @@ class SelectQuery(QueryBase):
         """
         See :py:meth:`QueryBase.select`
         """
-        # There is no point in having directly nested selects
+        # There is no point in having directly nested selects
         return SelectQuery(self._query, attributes)
 
     def filter(self, *args, **kwargs):
         """
         See :py:meth:`QueryBase.filter`
         """
-        # Apply the filter directly to the underlying query
+        # Apply the filter directly to the underlying query
         return SelectQuery(self._query.filter(F(*args, **kwargs)), self._attributes)
 
 
@@ -756,8 +756,8 @@ class DistinctQuery(QueryBase):
     def _run_query(self):
         seen = set()
         for attrs in self._query:
-            # To put it in a set, we need to convert the entry to something hashable
-            # We don't want to worry about ordering when comparing values, so each
+            # To put it in a set, we need to convert the entry to something hashable
+            # We don't want to worry about ordering when comparing values, so each
             # value is also converted to a frozenset
             hashable = frozenset((k, frozenset(v)) for k, v in attrs.items())
             if hashable not in seen:
@@ -775,5 +775,5 @@ class DistinctQuery(QueryBase):
         """
         See :py:meth:`QueryBase.filter`
         """
-        # Apply the filter directly to the underlying query
+        # Apply the filter directly to the underlying query
         return DistinctQuery(self._query.filter(F(*args, **kwargs)))
