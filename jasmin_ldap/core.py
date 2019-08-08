@@ -37,7 +37,7 @@ class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
         def as_server(server):
             if isinstance(server, ldap3.Server):
                 return server
-            return ldap3.Server(server, connect_timeout = self.DEFAULT_CONNECT_TIMEOUT)
+            return ldap3.Server(server, connect_timeout = cls.DEFAULT_CONNECT_TIMEOUT)
         super().__new__(
             cls,
             as_server(primary) if primary else None,
