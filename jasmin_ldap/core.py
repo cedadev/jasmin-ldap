@@ -171,6 +171,8 @@ class Connection:
                     generator = True,
                 )
                 for entry in entries:
+                    yield entry
+                    continue
                     # Try to convert each attribute to numeric values
                     attrs = { k : _convert(v) for k, v in entry['raw_attributes'].items() }
                     # Add the dn to the attribute dictionary before yielding
