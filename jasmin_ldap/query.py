@@ -255,9 +255,11 @@ class Query(QueryBase):
                   ``SCOPE_SINGLE_LEVEL``)
     """
     #: Scope to search entire subtree
-    SCOPE_SUBTREE      = Connection.SEARCH_SCOPE_SUBTREE
+    SCOPE_SUBTREE = Connection.SEARCH_SCOPE_SUBTREE
     #: Scope to search just a single level
     SCOPE_SINGLE_LEVEL = Connection.SEARCH_SCOPE_SINGLE_LEVEL
+    #: Scope to limit query to a single DN
+    SCOPE_ENTITY = Connection.SEARCH_SCOPE_ENTITY
 
     def __init__(self, conn, base_dn, filter = None, scope = SCOPE_SINGLE_LEVEL):
         self._conn = conn
@@ -408,7 +410,7 @@ class Query(QueryBase):
         query = self
         # If there is a DN node, we know it will be a single exact match
         if dn:
-            if self._scope == Connection.SEARCH_SCOPE_ENTITY:
+            if self._scope == self.SCOPE_ENTITY:
                 # We are already a single DN search - DNs must match
                 if dn.value.lower() != self._base_dn.lower():
                     # Filtering on two different DNs combined with AND can never
@@ -419,7 +421,7 @@ class Query(QueryBase):
                 # The DN must fall under our existing base DN
                 if dn.value.lower().endswith(self._base_dn.lower()):
                     query = Query(query._conn, dn.value,
-                                  query._filter, Connection.SEARCH_SCOPE_ENTITY)
+                                  query._filter, self.SCOPE_ENTITY)
                 else:
                     # If the DN is not under the base, there will never be any results
                     return EmptyQuery.instance
