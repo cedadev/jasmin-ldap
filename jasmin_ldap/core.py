@@ -47,19 +47,24 @@ class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
 
 def _convert(values):
     """
-    Tries to convert an iterable of string values from LDAP into int/float for
+    Tries to convert an iterable of bytes values from LDAP into int/float/str for
     comparisons.
 
-    If the conversion fails for any element, the original strings are returned.
+    If the conversion fails for any element, the original bytes are returned.
     """
     def _f(v):
         try:
             return int(v)
         except ValueError:
-            try:
-                return float(v)
-            except ValueError:
-                return v.decode('utf-8')
+            pass
+        try:
+            return float(v)
+        except ValueError:
+            pass
+        try:
+            return v.decode('utf-8')
+        except UnicodeDecodeError:
+            return v
     return [_f(v) for v in values]
 
 def _is_empty(value):
@@ -171,8 +176,6 @@ class Connection:
                     generator = True,
                 )
                 for entry in entries:
-                    yield entry
-                    continue
                     # Try to convert each attribute to numeric values
                     attrs = { k : _convert(v) for k, v in entry['raw_attributes'].items() }
                     # Add the dn to the attribute dictionary before yielding
