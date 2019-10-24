@@ -19,34 +19,57 @@ _log = logging.getLogger(__name__)
 class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
     """
     Represents a pool of servers consisting of a single read-write host, referred
-    to as the 'primary' host, and zero or more read-only replicas.
+    to as the 'primary' host, and zero or more read-only replicas. Each entry can
+    be ``None``, for example if there are no replicas or if only read-only access
+    is required.
+
+    Each server can be either a server name (e.g. `ldap.organisation.com`), a full
+    LDAP URI (e.g. `ldaps://ldap.organisation.com:8636`) or an `ldap3.Server` instance,
+    depending on whether complex configuration is required.
 
     Attributes:
         primary: Hostname of the primary host.
         replicas: Hostnames of the replicas.
     """
+    DEFAULT_CONNECT_TIMEOUT = 1.0
+
+    def __new__(cls, primary = None, replicas = None):
+        def as_server(server):
+            if isinstance(server, ldap3.Server):
+                return server
+            return ldap3.Server(server, connect_timeout = cls.DEFAULT_CONNECT_TIMEOUT)
+        return super().__new__(
+            cls,
+            as_server(primary) if primary else None,
+            tuple(as_server(s) for s in (replicas or []))
+        )
 
 
 def _convert(values):
     """
-    Tries to convert an iterable of string values from LDAP into int/float for
+    Tries to convert an iterable of bytes values from LDAP into int/float/str for
     comparisons.
 
-    If the conversion fails for any element, the original strings are returned.
+    If the conversion fails for any element, the original bytes are returned.
     """
     def _f(v):
         try:
             return int(v)
         except ValueError:
-            try:
-                return float(v)
-            except ValueError:
-                return v.decode('utf-8')
+            pass
+        try:
+            return float(v)
+        except ValueError:
+            pass
+        try:
+            return v.decode('utf-8')
+        except UnicodeDecodeError:
+            return v
     return [_f(v) for v in values]
 
 def _is_empty(value):
     """
-    Returns True if a value is considered non-empty, False otherwise.
+    Returns True if a value is considered empty, False otherwise.
     """
     if isinstance(value, collections.Iterable) and not isinstance(value, str):
         return not bool(value)
@@ -74,7 +97,7 @@ class Connection:
     MODE_READWRITE = 1
 
     #: Scope to search entire subtree
-    SEARCH_SCOPE_SUBTREE      = ldap3.SUBTREE
+    SEARCH_SCOPE_SUBTREE = ldap3.SUBTREE
     #: Scope to search just a single level
     SEARCH_SCOPE_SINGLE_LEVEL = ldap3.LEVEL
     #: Scope to search for a single entity (allows searching for a DN)
@@ -88,8 +111,8 @@ class Connection:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Just attempt to close the connection, but don't supress exceptions from
-        # inside the with statement
+        # Just attempt to close the connection, but don't supress exceptions from
+        # inside the with statement
         self.close()
         return False
 
@@ -153,7 +176,7 @@ class Connection:
                     generator = True,
                 )
                 for entry in entries:
-                    # Try to convert each attribute to numeric values
+                    # Try to convert each attribute to numeric values
                     attrs = { k : _convert(v) for k, v in entry['raw_attributes'].items() }
                     # Add the dn to the attribute dictionary before yielding
                     attrs['dn'] = entry['dn']
@@ -311,13 +334,14 @@ class Connection:
         """
         if mode not in [cls.MODE_READONLY, cls.MODE_READWRITE]:
             raise ValueError('Invalid mode given')
-        # In read-write mode, we can only choose the primary
-        # In read-only mode, try and use the primary first (as it has the canonical
-        # view of the data), but fall back to replicas if not available
+        # In read-write mode, we can only choose the primary
+        # In read-only mode, try and use the primary first (as it has the canonical
+        # view of the data), but fall back to replicas if not available
         servers = list(pool.replicas) if mode is cls.MODE_READONLY else []
         random.shuffle(servers)
-        servers.insert(0, pool.primary)
-        # Try each server until we get a successful connection
+        if pool.primary:
+            servers.insert(0, pool.primary)
+        # Try each server until we get a successful connection
         for server in servers:
             try:
                 _log.debug('Opening LDAP connection to {} for {}'.format(server, user))
@@ -334,7 +358,7 @@ class Connection:
                 # that it will also be the case for the other servers and bail
                 raise exceptions.AuthenticationError('Invalid user DN or password')
             except ldap3.core.exceptions.LDAPException as e:
-                # For other LDAP exceptions, log them and try the next server
+                # For other LDAP exceptions, log them and try the next server
                 _log.exception('Failed to open connection to {} for {}'.format(server, user))
         # If we exit the loop without returning a connection, there are no available servers
         raise exceptions.NoServerAvailableError('No suitable server available')
