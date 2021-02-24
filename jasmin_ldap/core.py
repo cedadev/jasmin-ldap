@@ -31,7 +31,7 @@ class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
         primary: Hostname of the primary host.
         replicas: Hostnames of the replicas.
     """
-    DEFAULT_CONNECT_TIMEOUT = 1.0
+    DEFAULT_CONNECT_TIMEOUT = 5.0
 
     def __new__(cls, primary = None, replicas = None):
         def as_server(server):
