@@ -6,17 +6,19 @@ is intended to be more intuitive and easier to mock.
 __author__ = "Matt Pryor"
 __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 
-import logging, contextlib, collections, random
+import collections
+import contextlib
+import logging
+import random
 
 import ldap3
 
 from . import exceptions
 
-
 _log = logging.getLogger(__name__)
 
 
-class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
+class ServerPool(collections.namedtuple("ServerPool", ["primary", "replicas"])):
     """
     Represents a pool of servers consisting of a single read-write host, referred
     to as the 'primary' host, and zero or more read-only replicas. Each entry can
@@ -31,17 +33,19 @@ class ServerPool(collections.namedtuple('ServerPool', ['primary', 'replicas'])):
         primary: Hostname of the primary host.
         replicas: Hostnames of the replicas.
     """
+
     DEFAULT_CONNECT_TIMEOUT = 5.0
 
-    def __new__(cls, primary = None, replicas = None):
+    def __new__(cls, primary=None, replicas=None):
         def as_server(server):
             if isinstance(server, ldap3.Server):
                 return server
-            return ldap3.Server(server, connect_timeout = cls.DEFAULT_CONNECT_TIMEOUT)
+            return ldap3.Server(server, connect_timeout=cls.DEFAULT_CONNECT_TIMEOUT)
+
         return super().__new__(
             cls,
             as_server(primary) if primary else None,
-            tuple(as_server(s) for s in (replicas or []))
+            tuple(as_server(s) for s in (replicas or [])),
         )
 
 
@@ -52,6 +56,7 @@ def _convert(values):
 
     If the conversion fails for any element, the original bytes are returned.
     """
+
     def _f(v):
         try:
             return int(v)
@@ -62,10 +67,12 @@ def _convert(values):
         except ValueError:
             pass
         try:
-            return v.decode('utf-8')
+            return v.decode("utf-8")
         except UnicodeDecodeError:
             return v
+
     return [_f(v) for v in values]
+
 
 def _is_empty(value):
     """
@@ -75,7 +82,7 @@ def _is_empty(value):
         return not bool(value)
     elif value is None:
         return True
-    elif value == '':
+    elif value == "":
         return True
     return False
 
@@ -91,6 +98,7 @@ class Connection:
         with Connection.create(servers, user, passwd) as conn:
             # ... do something with conn ...
     """
+
     #: Mode for a read-only connection
     MODE_READONLY = 0
     #: Mode for a read-write connection
@@ -139,7 +147,7 @@ class Connection:
         except ldap3.core.exceptions.LDAPException as e:
             raise exceptions.LDAPError from e
 
-    def search(self, base_dn, filter_str, scope = SEARCH_SCOPE_SINGLE_LEVEL):
+    def search(self, base_dn, filter_str, scope=SEARCH_SCOPE_SINGLE_LEVEL):
         """
         Perform an LDAP search to find entries that match the given LDAP filter
         string under the given base DN and scope.
@@ -162,24 +170,28 @@ class Connection:
         Raises:
             Any of the exceptions from :py:mod:`~.exceptions`.
         """
-        _log.debug('Performing LDAP search (base_dn: {}, filter: {})'.format(base_dn, filter_str))
+        _log.debug(
+            "Performing LDAP search (base_dn: {}, filter: {})".format(
+                base_dn, filter_str
+            )
+        )
         with self._connection() as conn:
             try:
                 # Get a generator of results using a paged search
                 # This saves memory for large result sets
                 # For now, use the default page size (100 at time of writing)
                 entries = conn.extend.standard.paged_search(
-                    search_base = base_dn,
-                    search_filter = filter_str,
-                    search_scope = scope,
-                    attributes = ldap3.ALL_ATTRIBUTES,
-                    generator = True,
+                    search_base=base_dn,
+                    search_filter=filter_str,
+                    search_scope=scope,
+                    attributes=ldap3.ALL_ATTRIBUTES,
+                    generator=True,
                 )
                 for entry in entries:
                     # Try to convert each attribute to numeric values
-                    attrs = { k : _convert(v) for k, v in entry['raw_attributes'].items() }
+                    attrs = {k: _convert(v) for k, v in entry["raw_attributes"].items()}
                     # Add the dn to the attribute dictionary before yielding
-                    attrs['dn'] = entry['dn']
+                    attrs["dn"] = entry["dn"]
                     yield attrs
             except ldap3.core.exceptions.LDAPNoSuchObjectResult as e:
                 # NoSuchObject means an empty search
@@ -199,15 +211,15 @@ class Connection:
         Raises:
             Any of the exceptions from :py:mod:`~.exceptions`.
         """
-        _log.debug('Creating LDAP entry at dn {}'.format(dn))
+        _log.debug("Creating LDAP entry at dn {}".format(dn))
         if self._mode is not self.MODE_READWRITE:
             raise exceptions.OperationNotAllowedError(
-                'Write operation attempted with read-only connection'
+                "Write operation attempted with read-only connection"
             )
         # Prepare the attributes for insertion by removing any keys with empty values
-        attributes = { k : v for k, v in attributes.items() if not _is_empty(v) }
+        attributes = {k: v for k, v in attributes.items() if not _is_empty(v)}
         with self._connection() as conn:
-            conn.add(dn, attributes = attributes)
+            conn.add(dn, attributes=attributes)
         return True
 
     def update_entry(self, dn, attributes):
@@ -226,21 +238,23 @@ class Connection:
         Raises:
             Any of the exceptions from :py:mod:`~.exceptions`.
         """
-        _log.debug('Updating LDAP entry at dn {}'.format(dn))
+        _log.debug("Updating LDAP entry at dn {}".format(dn))
         if self._mode is not self.MODE_READWRITE:
             raise exceptions.OperationNotAllowedError(
-                'Write operation attempted with read-only connection'
+                "Write operation attempted with read-only connection"
             )
+
         def to_tuple(value):
             if isinstance(value, collections.Iterable) and not isinstance(value, str):
                 return tuple(value)
             elif _is_empty(value):
                 return ()
             else:
-                return (value, )
+                return (value,)
+
         # Indicate that the attributes should replace any existing attributes
         attributes = {
-            name : (ldap3.MODIFY_REPLACE, to_tuple(value))
+            name: (ldap3.MODIFY_REPLACE, to_tuple(value))
             for name, value in attributes.items()
         }
         with self._connection() as conn:
@@ -261,10 +275,10 @@ class Connection:
         Raises:
             Any of the exceptions from :py:mod:`~.exceptions`.
         """
-        _log.debug('Updating password for dn {}'.format(dn))
+        _log.debug("Updating password for dn {}".format(dn))
         if self._mode is not self.MODE_READWRITE:
             raise exceptions.OperationNotAllowedError(
-                'Write operation attempted with read-only connection'
+                "Write operation attempted with read-only connection"
             )
         with self._connection() as conn:
             conn.extend.standard.modify_password(dn, None, password)
@@ -283,10 +297,10 @@ class Connection:
         Raises:
             Any of the exceptions from :py:mod:`~.exceptions`.
         """
-        _log.debug('Deleting LDAP entry at dn {}'.format(dn))
+        _log.debug("Deleting LDAP entry at dn {}".format(dn))
         if self._mode is not self.MODE_READWRITE:
             raise exceptions.OperationNotAllowedError(
-                'Write operation attempted with read-only connection'
+                "Write operation attempted with read-only connection"
             )
         with self._connection() as conn:
             conn.delete(dn)
@@ -302,13 +316,13 @@ class Connection:
         Raises:
             Any of the exceptions from :py:mod:`~.exceptions`.
         """
-        _log.debug('Closing LDAP connection')
+        _log.debug("Closing LDAP connection")
         with self._connection() as conn:
             conn.unbind()
         return True
 
     @classmethod
-    def create(cls, pool, user = '', password = '', mode = MODE_READONLY):
+    def create(cls, pool, user="", password="", mode=MODE_READONLY):
         """
         Creates a new LDAP connection with the given arguments.
 
@@ -333,7 +347,7 @@ class Connection:
             Any of the exceptions from :py:mod:`~.exceptions`.
         """
         if mode not in [cls.MODE_READONLY, cls.MODE_READWRITE]:
-            raise ValueError('Invalid mode given')
+            raise ValueError("Invalid mode given")
         # In read-write mode, we can only choose the primary
         # In read-only mode, try and use the primary first (as it has the canonical
         # view of the data), but fall back to replicas if not available
@@ -344,21 +358,25 @@ class Connection:
         # Try each server until we get a successful connection
         for server in servers:
             try:
-                _log.debug('Opening LDAP connection to {} for {}'.format(server, user))
+                _log.debug("Opening LDAP connection to {} for {}".format(server, user))
                 return cls(
                     ldap3.Connection(
-                        server, user = user, password = password,
-                        auto_bind = ldap3.AUTO_BIND_TLS_BEFORE_BIND,
-                        raise_exceptions = True
+                        server,
+                        user=user,
+                        password=password,
+                        auto_bind=ldap3.AUTO_BIND_TLS_BEFORE_BIND,
+                        raise_exceptions=True,
                     ),
-                    mode
+                    mode,
                 )
             except ldap3.core.exceptions.LDAPOperationResult as e:
                 # The first time we get an actual authentication failure, assume
                 # that it will also be the case for the other servers and bail
-                raise exceptions.AuthenticationError('Invalid user DN or password')
+                raise exceptions.AuthenticationError("Invalid user DN or password")
             except ldap3.core.exceptions.LDAPException as e:
                 # For other LDAP exceptions, log them and try the next server
-                _log.exception('Failed to open connection to {} for {}'.format(server, user))
+                _log.exception(
+                    "Failed to open connection to {} for {}".format(server, user)
+                )
         # If we exit the loop without returning a connection, there are no available servers
-        raise exceptions.NoServerAvailableError('No suitable server available')
+        raise exceptions.NoServerAvailableError("No suitable server available")

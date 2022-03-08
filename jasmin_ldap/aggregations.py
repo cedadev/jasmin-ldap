@@ -10,6 +10,7 @@ class Count:
     """
     Aggregation that counts the number of items in a query.
     """
+
     def __init__(self):
         self.reset()
 
@@ -28,6 +29,7 @@ class Max:
 
     :param attribute: The attribute to compute the max of
     """
+
     def __init__(self, attribute):
         self._attribute = attribute
         self.reset()
@@ -50,6 +52,7 @@ class Min:
 
     :param attribute: The attribute to compute the min of
     """
+
     def __init__(self, attribute):
         self._attribute = attribute
         self.reset()

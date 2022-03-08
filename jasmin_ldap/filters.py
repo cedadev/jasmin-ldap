@@ -37,15 +37,15 @@ def F(*args, **kwargs):
     # Check that all the given args are nodes
     for f in args:
         if not isinstance(f, Node):
-            raise ValueError('Positional arguments must be nodes')
+            raise ValueError("Positional arguments must be nodes")
         filters.append(f)
     # Turn the keyword args into expressions
     for spec, value in kwargs.items():
-        field, lookup_type, *notused = spec.split('__') + [None]
+        field, lookup_type, *notused = spec.split("__") + [None]
         filters.append(Expression(field, lookup_type, value))
     # If there are no filters, that is an error
     if not filters:
-        raise ValueError('No arguments given')
+        raise ValueError("No arguments given")
     # If there is one filter, return it
     if len(filters) == 1:
         return filters[0]
@@ -101,8 +101,7 @@ class Node:
         return self.not_()
 
 
-class Expression(namedtuple('_Expression',
-                            ['field', 'lookup_type', 'value']), Node):
+class Expression(namedtuple("_Expression", ["field", "lookup_type", "value"]), Node):
     """
     Node type for a single expression with a field, a lookup type and a value.
 
@@ -125,6 +124,7 @@ class AndNode(Node):
     """
     Node type for combining two or more nodes using AND.
     """
+
     def __init__(self, first, second, *others):
         self._children = (first, second) + tuple(others)
 
@@ -139,17 +139,18 @@ class AndNode(Node):
 
     def and_(self, other):
         # Customise AND to just add a child instead of increasing the tree depth
-        children = self._children + (other, )
+        children = self._children + (other,)
         return AndNode(*children)
 
     def __repr__(self):
-        return 'AndNode<{}>'.format(', '.join(repr(c) for c in self._children))
+        return "AndNode<{}>".format(", ".join(repr(c) for c in self._children))
 
 
 class OrNode(Node):
     """
     Node type for combining two or more nodes using OR.
     """
+
     def __init__(self, first, second, *others):
         self._children = (first, second) + tuple(others)
 
@@ -164,17 +165,18 @@ class OrNode(Node):
 
     def or_(self, other):
         # Customise OR to just add a child instead of increasing the tree depth
-        children = self._children + (other, )
+        children = self._children + (other,)
         return OrNode(*children)
 
     def __repr__(self):
-        return 'OrNode<{}>'.format(', '.join(repr(c) for c in self._children))
+        return "OrNode<{}>".format(", ".join(repr(c) for c in self._children))
 
 
 class NotNode(Node):
     """
     Node type for negating a node using NOT.
     """
+
     def __init__(self, node):
         self._child = node
 
@@ -192,4 +194,4 @@ class NotNode(Node):
         return self._child
 
     def __repr__(self):
-        return 'NotNode<{}>'.format(repr(self.child))
+        return "NotNode<{}>".format(repr(self.child))
