@@ -6,14 +6,11 @@ __author__ = "Matt Pryor"
 __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 
 import abc
-import re
-from collections import Iterable
 from functools import cmp_to_key, reduce
 from operator import or_
 
 import ldap3.utils.conv
 
-from .aggregations import Count
 from .core import Connection
 from .filters import AndNode, Expression, F, NotNode, OrNode
 

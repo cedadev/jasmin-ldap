@@ -7,6 +7,7 @@ __author__ = "Matt Pryor"
 __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"
 
 import collections
+import collections.abc
 import contextlib
 import logging
 import random
@@ -78,7 +79,7 @@ def _is_empty(value):
     """
     Returns True if a value is considered empty, False otherwise.
     """
-    if isinstance(value, collections.Iterable) and not isinstance(value, str):
+    if isinstance(value, collections.abc.Iterable) and not isinstance(value, str):
         return not bool(value)
     elif value is None:
         return True
@@ -245,7 +246,9 @@ class Connection:
             )
 
         def to_tuple(value):
-            if isinstance(value, collections.Iterable) and not isinstance(value, str):
+            if isinstance(value, collections.abc.Iterable) and not isinstance(
+                value, str
+            ):
                 return tuple(value)
             elif _is_empty(value):
                 return ()
