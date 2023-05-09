@@ -19,7 +19,7 @@ from collections import namedtuple
 
 
 def F(*args, **kwargs):
-    """
+    r"""
     Utility function for easily creating :py:class:`Node`\ s.
 
     Positional arguments should be :py:class:`Node` objects.
@@ -130,7 +130,7 @@ class AndNode(Node):
 
     @property
     def children(self):
-        """
+        r"""
         Returns the child nodes that should be combined using AND.
 
         :returns: A ``tuple`` of :py:class:`Node`\ s
@@ -156,7 +156,7 @@ class OrNode(Node):
 
     @property
     def children(self):
-        """
+        r"""
         Returns the child nodes that should be combined using OR.
 
         :returns: A ``tuple`` of :py:class:`Node`\ s

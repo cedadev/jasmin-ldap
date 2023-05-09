@@ -1,6 +1,4 @@
-"""
-Simple annotations for use with :py:class:`.query.Query`\ s.
-"""
+r"""Simple annotations for use with :py:class:`.query.Query`\ s."""
 
 __author__ = "Matt Pryor"
 __copyright__ = "Copyright 2015 UK Science and Technology Facilities Council"

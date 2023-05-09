@@ -58,7 +58,7 @@ class QueryBase(metaclass=abc.ABCMeta):
         return DistinctQuery(self)
 
     def filter(self, *args, **kwargs):
-        """
+        r"""
         Returns a new query with args combined with this query using AND.
 
         Positional arguments should be :py:class:`.filters.Node`\ s.
@@ -447,7 +447,7 @@ class Query(QueryBase):
 
 
 class AnnotatedQuery(QueryBase):
-    """
+    r"""
     An LDAP query with additional annotations.
 
     :param query: The underlying query
