@@ -1,4 +1,4 @@
-"""
+r"""
 Simple annotations for use with :py:class:`.query.Query`\ s.
 """
 
