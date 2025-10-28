@@ -360,6 +360,8 @@ class Connection:
             servers.insert(0, pool.primary)
         # Try each server until we get a successful connection
         for server in servers:
+            # Configure auto_bind based on whether the server uses SSL
+            auto_bind = ldap3.AUTO_BIND_NO_TLS if server.ssl else ldap3.AUTO_BIND_TLS_BEFORE_BIND
             try:
                 _log.debug("Opening LDAP connection to {} for {}".format(server, user))
                 return cls(
@@ -367,7 +369,7 @@ class Connection:
                         server,
                         user=user,
                         password=password,
-                        auto_bind=ldap3.AUTO_BIND_TLS_BEFORE_BIND,
+                        auto_bind=auto_bind,
                         raise_exceptions=True,
                     ),
                     mode,
