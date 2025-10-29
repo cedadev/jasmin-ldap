@@ -23,7 +23,7 @@ with open(os.path.join(here, "README.md")) as f:
     README = f.read()
 
 requires = [
-    "ldap3",
+    "ldap3<=2.9.1",
 ]
 
 if __name__ == "__main__":
